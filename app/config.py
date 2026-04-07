@@ -2,31 +2,35 @@ from functools import lru_cache
 from typing import Any, List
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, DotEnvSettingsSource, SettingsConfigDict
+from pydantic_settings import BaseSettings, DotEnvSettingsSource, EnvSettingsSource, SettingsConfigDict
 from pydantic.fields import FieldInfo
 
 
-class _CommaSepDotEnvSource(DotEnvSettingsSource):
-    """
-    Custom dotenv source that accepts comma-separated strings for List[str] fields.
+def _comma_fallback(value: Any) -> Any:
+    """Split a plain comma-separated string into a list."""
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return value
 
-    Overrides decode_complex_value so that when json.loads() fails on a plain
-    comma-separated string, it falls back to splitting by comma instead of
-    raising SettingsError.
-    """
 
-    def decode_complex_value(
-        self,
-        field_name: str,
-        field: FieldInfo,
-        value: Any,
-    ) -> Any:
+class _CommaSepEnvSource(EnvSettingsSource):
+    """OS environment variable source with comma-separated List[str] support."""
+
+    def decode_complex_value(self, field_name: str, field: FieldInfo, value: Any) -> Any:
         try:
             return super().decode_complex_value(field_name, field, value)
         except ValueError:
-            if isinstance(value, str):
-                return [item.strip() for item in value.split(",") if item.strip()]
-            raise
+            return _comma_fallback(value)
+
+
+class _CommaSepDotEnvSource(DotEnvSettingsSource):
+    """.env file source with comma-separated List[str] support."""
+
+    def decode_complex_value(self, field_name: str, field: FieldInfo, value: Any) -> Any:
+        try:
+            return super().decode_complex_value(field_name, field, value)
+        except ValueError:
+            return _comma_fallback(value)
 
 
 class Settings(BaseSettings):
@@ -48,7 +52,7 @@ class Settings(BaseSettings):
     ):
         return (
             init_settings,
-            env_settings,
+            _CommaSepEnvSource(settings_cls, case_sensitive=True),
             _CommaSepDotEnvSource(
                 settings_cls,
                 env_file=".env",

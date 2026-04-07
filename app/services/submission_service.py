@@ -60,7 +60,14 @@ class SubmissionService:
         submission = Submission(user_id=user_id, status=SubmissionStatus.PENDING)
         db.add(submission)
         await db.flush()
-        await db.refresh(submission)
+        # Re-fetch with relationships so the schema can access submission.files
+        stmt = (
+            select(Submission)
+            .where(Submission.id == submission.id)
+            .options(selectinload(Submission.files))
+        )
+        result = await db.execute(stmt)
+        submission = result.scalar_one()
         logger.info("Submission created: %s by user: %s", submission.id, user_id)
         return submission
 

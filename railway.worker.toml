@@ -1,0 +1,2 @@
+[deploy]
+startCommand = "celery -A celery_worker worker --loglevel=info --concurrency=2"

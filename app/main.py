@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 
 from app.api import (  # noqa: E402
     auth,
+    auth_social,
     avatar,
     coach,
     corrections,
@@ -230,6 +231,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 API_PREFIX = "/api/v1"
 
 app.include_router(auth.router,        prefix=f"{API_PREFIX}/auth",        tags=["Auth"])
+app.include_router(auth_social.router, prefix=f"{API_PREFIX}",             tags=["Social Auth"])
 app.include_router(users.router,       prefix=f"{API_PREFIX}/users",       tags=["Users"])
 app.include_router(submissions.router, prefix=f"{API_PREFIX}/submissions",  tags=["Submissions"])
 app.include_router(avatar.router,      prefix=f"{API_PREFIX}/avatar",       tags=["Avatar"])

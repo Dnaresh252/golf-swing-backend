@@ -50,8 +50,8 @@ async def register(
     payload: UserRegister,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(register_rate_limiter),
 ):
+    await register_rate_limiter(request)  # explicit call — runs before any auth logic
     rid = _request_id(request)
     try:
         user = await auth_service.register_user(db, payload)
@@ -83,8 +83,8 @@ async def login(
     payload: UserLogin,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(login_rate_limiter),
 ):
+    await login_rate_limiter(request)  # explicit call — runs before any auth logic
     rid = _request_id(request)
     try:
         user = await auth_service.authenticate_user(db, payload.email, payload.password)

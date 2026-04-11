@@ -15,7 +15,7 @@ import time
 import logging
 
 import redis.asyncio as aioredis
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import HTTPException, Request, status
 
 from app.config import settings
 

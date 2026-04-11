@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 
@@ -149,9 +150,13 @@ async def post_results(
         str(current_user.id), str(submission_id), "RESULTS_VIDEO", file.filename or "results.mp4"
     )
     try:
-        upload_result = b2_service.upload_file(content, dest, file.content_type)
+        loop = asyncio.get_event_loop()
+        upload_result = await loop.run_in_executor(
+            None, b2_service.upload_file, content, dest, file.content_type
+        )
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error("B2 upload failed for submission %s: %s", submission_id, exc)
+        raise HTTPException(status_code=500, detail="Video upload failed. Please try again.")
 
     results_video = ResultsVideo(
         submission_id=submission_id,

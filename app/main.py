@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
@@ -67,6 +68,7 @@ from app.api import (  # noqa: E402
     users,
 )
 from app.database import AsyncSessionLocal, engine  # noqa: E402
+from app.utils.rate_limit import limiter  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Lifespan (startup / shutdown)
@@ -110,6 +112,13 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan,
 )
+
+# ---------------------------------------------------------------------------
+# Rate limiter state (slowapi)
+# ---------------------------------------------------------------------------
+
+app.state.limiter = limiter
+
 
 # ---------------------------------------------------------------------------
 # CORS middleware
@@ -161,6 +170,24 @@ app.add_middleware(RequestIDMiddleware)
 
 def _request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "unknown")
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    logger.warning(
+        "RateLimitExceeded | id=%s | limit=%s | path=%s",
+        _request_id(request),
+        str(exc.detail),
+        request.url.path,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={
+            "status": "error",
+            "message": "Too many requests. Please wait before trying again.",
+            "request_id": _request_id(request),
+        },
+    )
 
 
 @app.exception_handler(HTTPException)

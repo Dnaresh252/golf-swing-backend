@@ -16,6 +16,7 @@ from app.schemas.auth import (
     CoachLogin,
 )
 from app.services.auth_service import auth_service
+from app.utils.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ def _error(message: str, request_id: str, status_code: int) -> HTTPException:
     status_code=status.HTTP_201_CREATED,
     summary="Register a new user account",
 )
+@limiter.limit("10/hour")
 async def register(
     payload: UserRegister,
     request: Request,
@@ -77,6 +79,7 @@ async def register(
 # ---------------------------------------------------------------------------
 
 @router.post("/login", summary="Authenticate a user")
+@limiter.limit("5/minute")
 async def login(
     payload: UserLogin,
     request: Request,

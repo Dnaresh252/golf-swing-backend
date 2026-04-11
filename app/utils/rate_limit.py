@@ -42,7 +42,13 @@ def make_rate_limiter(max_requests: int, window_seconds: int):
     *window_seconds* seconds.
     """
     async def _check(request: Request) -> None:
-        ip = (request.client.host if request.client else "unknown")
+        # Use X-Forwarded-For to get the real client IP.
+        # Railway (and most cloud proxies) append the actual client IP there.
+        # request.client.host is the proxy's internal IP (100.64.x.x), not the caller.
+        forwarded_for = request.headers.get("X-Forwarded-For", "")
+        ip = forwarded_for.split(",")[0].strip() if forwarded_for else (
+            request.client.host if request.client else "unknown"
+        )
         # Bucket key: resets every window_seconds
         bucket = int(time.time()) // window_seconds
         path   = request.url.path.replace("/", "_")
@@ -83,5 +89,5 @@ def make_rate_limiter(max_requests: int, window_seconds: int):
 
 
 # Pre-built limiters — import these in route files
-login_rate_limiter    = make_rate_limiter(max_requests=3,  window_seconds=60)  # DEBUG: 3 to verify 429 before lockout (5)
+login_rate_limiter    = make_rate_limiter(max_requests=5,  window_seconds=60)
 register_rate_limiter = make_rate_limiter(max_requests=10, window_seconds=3600)

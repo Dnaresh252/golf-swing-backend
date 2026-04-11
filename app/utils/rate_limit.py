@@ -49,15 +49,25 @@ def make_rate_limiter(max_requests: int, window_seconds: int):
         key    = f"ratelimit:{path}:{ip}:{bucket}"
 
         r = _get_redis()
-        count = await r.incr(key)
-        if count == 1:
-            # First hit in this window — set TTL so the key self-expires
-            await r.expire(key, window_seconds)
+        try:
+            count = await r.incr(key)
+            if count == 1:
+                # First hit in this window — set TTL so the key self-expires
+                await r.expire(key, window_seconds)
+        except Exception as exc:
+            # Redis unreachable — fail open (log and allow through)
+            logger.error("Rate limiter Redis error: %s", exc)
+            return
+
+        logger.info(
+            "RateLimit | path=%s | ip=%s | count=%d | limit=%d | key=%s",
+            request.url.path, ip, count, max_requests, key,
+        )
 
         if count > max_requests:
             logger.warning(
-                "Rate limit exceeded | path=%s | ip=%s | count=%d | limit=%d",
-                request.url.path, ip, count, max_requests,
+                "Rate limit EXCEEDED | path=%s | ip=%s | count=%d",
+                request.url.path, ip, count,
             )
             rid = getattr(request.state, "request_id", "unknown")
             raise HTTPException(
@@ -73,5 +83,5 @@ def make_rate_limiter(max_requests: int, window_seconds: int):
 
 
 # Pre-built limiters — import these in route files
-login_rate_limiter    = make_rate_limiter(max_requests=5,  window_seconds=60)
+login_rate_limiter    = make_rate_limiter(max_requests=3,  window_seconds=60)  # DEBUG: 3 to verify 429 before lockout (5)
 register_rate_limiter = make_rate_limiter(max_requests=10, window_seconds=3600)

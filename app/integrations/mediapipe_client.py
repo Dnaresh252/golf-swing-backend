@@ -1,21 +1,20 @@
 """
 MediaPipe integration layer.
 
-Specialist 3 will drop their module (specialist3_ml) into the Python path.
-This client wraps their API so the rest of the codebase stays stable
-regardless of whether the real ML module is available.
+Wraps Specialist 3's ml_cv_engine module so the rest of the codebase
+stays stable regardless of whether the real ML module is available.
 
-Expected interface from Specialist 3:
-    specialist3_ml.detect_pose_from_image(image_path: str, angle: str) -> list[dict]
-    specialist3_ml.detect_pose_from_video(video_path: str) -> list[dict]
-    specialist3_ml.generate_3d_avatar(skeleton_data: dict) -> dict
-    specialist3_ml.render_avatar_angles(model_path: str) -> dict
+Real API (app.integrations.ml_cv_engine.api_functions):
+    celery_task_analyze(submission_id, image_paths, video_path) -> dict
+    celery_task_correction(submission_id, original_joints, corrected_joints) -> dict
+
+Both return dicts that are mapped to our canonical structure in run_full_pipeline()
+and apply_correction() below.
 """
 
 import logging
 import math
 import random
-import uuid
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -80,7 +79,8 @@ class MediaPipeClient:
         self._specialist3 = None
 
         try:
-            import specialist3_ml  # type: ignore
+            from app.integrations import ml_cv_engine  # type: ignore  # noqa: F401
+            import app.integrations.ml_cv_engine.api_functions as specialist3_ml  # type: ignore
             self._specialist3 = specialist3_ml
             logger.info("specialist3_ml loaded — using real MediaPipe pipeline.")
         except ImportError:
@@ -94,155 +94,155 @@ class MediaPipeClient:
     # Public API
     # ------------------------------------------------------------------
 
-    def detect_skeleton_from_image(self, image_path: str, angle: str) -> Dict[str, Any]:
+    def run_full_pipeline(
+        self,
+        submission_id: str,
+        image_paths: Dict[str, str],
+        video_path: str,
+    ) -> Dict[str, Any]:
         """
-        Run pose detection on a single image.
+        Run the complete ML pipeline: skeleton detection, avatar generation,
+        and angle-view renders in a single call.
 
-        Returns a dict with key 'joints': list of 33 joint dicts, each containing:
-            {id, name, x, y, z, confidence}
-
-        Raises ValueError on failure.
-        """
-        if self._mock_mode:
-            logger.debug("MOCK detect_skeleton_from_image: angle=%s path=%s", angle, image_path)
-            return self._mock_single_frame(angle=angle)
-
-        try:
-            raw = self._specialist3.detect_pose_from_image(image_path, angle)
-            return self._normalise_joints(raw)
-        except Exception as exc:
-            logger.error("detect_skeleton_from_image failed (%s): %s", image_path, exc)
-            raise ValueError(f"Skeleton detection failed for angle '{angle}': {exc}") from exc
-
-    def detect_skeleton_from_video(self, video_path: str) -> List[Dict[str, Any]]:
-        """
-        Run pose detection on every frame of a video.
-
-        Returns a list of frame dicts, each containing:
-            {frame_num, timestamp, joints: [...]}
-
-        Raises ValueError on failure.
-        """
-        if self._mock_mode:
-            logger.debug("MOCK detect_skeleton_from_video: path=%s", video_path)
-            return self._mock_video_frames(num_frames=30)
-
-        try:
-            raw_frames = self._specialist3.detect_pose_from_video(video_path)
-            return [
-                {
-                    "frame_num": i,
-                    "timestamp": frame.get("timestamp", i / 30.0),
-                    "joints": self._normalise_joints(frame.get("joints", []))["joints"],
-                }
-                for i, frame in enumerate(raw_frames)
-            ]
-        except Exception as exc:
-            logger.error("detect_skeleton_from_video failed (%s): %s", video_path, exc)
-            raise ValueError(f"Video skeleton detection failed: {exc}") from exc
-
-    def generate_avatar_model(self, skeleton_data: Dict[str, Any]) -> Dict[str, str]:
-        """
-        Generate a 3-D avatar from combined skeleton data.
+        Args:
+            submission_id: Unique submission identifier.
+            image_paths:   {"front": path, "left": path, "right": path, "back": path}
+            video_path:    Local path to the swing video file.
 
         Returns:
-            {"obj_path": str, "fbx_path": str, "glb_path": str}
+            {
+                "skeleton_json":      {"submission_id": str, "frames": [...]},
+                "avatar_paths":       {"obj": str, "glb": str, "fbx": str},
+                "render_paths":       {"top": str, "front": str, "left": str,
+                                       "right": str, "back": str},
+                "key_frames":         dict,
+                "swing_angles":       dict,
+                "analysis_warnings":  list[str],
+            }
+
+        Raises ValueError on pipeline failure.
+        """
+        if self._mock_mode:
+            logger.debug("MOCK run_full_pipeline: submission=%s", submission_id)
+            return self._mock_full_pipeline(submission_id)
+
+        try:
+            result = self._specialist3.celery_task_analyze(
+                submission_id, image_paths, video_path
+            )
+            return {
+                "skeleton_json":     result["skeleton_json"],
+                "avatar_paths":      result["avatar_paths"],
+                "render_paths":      result["render_paths"],
+                "key_frames":        result.get("key_frames", {}),
+                "swing_angles":      result.get("swing_angles", {}),
+                "analysis_warnings": result.get("analysis_warnings", []),
+            }
+        except Exception as exc:
+            logger.error("run_full_pipeline failed (%s): %s", submission_id, exc)
+            raise ValueError(
+                f"ML pipeline failed for submission '{submission_id}': {exc}"
+            ) from exc
+
+    def apply_correction(
+        self,
+        submission_id: str,
+        original_joints: List[Dict[str, Any]],
+        corrected_joints: List[Dict[str, Any]],
+        blend: float = 1.0,
+    ) -> Dict[str, Any]:
+        """
+        Apply a coach correction and regenerate corrected avatar renders.
+
+        Args:
+            submission_id:    Submission identifier for output naming.
+            original_joints:  Baseline frame joints from the detector.
+            corrected_joints: Coach-adjusted joints.
+            blend:            Blend factor in [0, 1]. Defaults to 1.0 (full correction).
+
+        Returns:
+            {
+                "submission_id":  str,
+                "updated_joints": list,
+                "render_paths":   dict,
+                "avatar_paths":   {"obj": str, "glb": str, "fbx": str},
+            }
 
         Raises ValueError on failure.
         """
         if self._mock_mode:
-            logger.debug("MOCK generate_avatar_model")
+            logger.debug("MOCK apply_correction: submission=%s", submission_id)
             return {
-                "obj_path": "/tmp/mock_avatar.obj",
-                "fbx_path": "/tmp/mock_avatar.fbx",
-                "glb_path": "/tmp/mock_avatar.glb",
+                "submission_id":  submission_id,
+                "updated_joints": corrected_joints,
+                "render_paths": {
+                    "top":   "/tmp/mock_corrected_top.png",
+                    "front": "/tmp/mock_corrected_front.png",
+                    "left":  "/tmp/mock_corrected_left.png",
+                    "right": "/tmp/mock_corrected_right.png",
+                    "back":  "/tmp/mock_corrected_back.png",
+                },
+                "avatar_paths": {
+                    "obj": "/tmp/mock_corrected_avatar.obj",
+                    "glb": "/tmp/mock_corrected_avatar.glb",
+                    "fbx": "/tmp/mock_corrected_avatar.fbx",
+                },
             }
 
         try:
-            result = self._specialist3.generate_3d_avatar(skeleton_data)
-            if not all(k in result for k in ("obj_path", "fbx_path", "glb_path")):
-                raise ValueError("generate_3d_avatar returned incomplete data.")
-            return result
-        except Exception as exc:
-            logger.error("generate_avatar_model failed: %s", exc)
-            raise ValueError(f"Avatar model generation failed: {exc}") from exc
-
-    def generate_angle_views(self, avatar_model_path: str) -> Dict[str, str]:
-        """
-        Render 5 PNG screenshots of the avatar from each cardinal angle.
-
-        Returns:
-            {"top": path, "front": path, "left": path, "right": path, "back": path}
-
-        Raises ValueError on failure.
-        """
-        if self._mock_mode:
-            logger.debug("MOCK generate_angle_views: model=%s", avatar_model_path)
+            result = self._specialist3.celery_task_correction(
+                submission_id, original_joints, corrected_joints
+            )
             return {
-                "top":   "/tmp/mock_view_top.png",
-                "front": "/tmp/mock_view_front.png",
-                "left":  "/tmp/mock_view_left.png",
-                "right": "/tmp/mock_view_right.png",
-                "back":  "/tmp/mock_view_back.png",
+                "submission_id":  result.get("submission_id", submission_id),
+                "updated_joints": result.get("updated_joints", corrected_joints),
+                "render_paths":   result.get("render_paths", {}),
+                "avatar_paths":   result.get("avatar_paths", {}),
             }
-
-        try:
-            result = self._specialist3.render_avatar_angles(avatar_model_path)
-            required = {"top", "front", "left", "right", "back"}
-            missing = required - set(result.keys())
-            if missing:
-                raise ValueError(f"render_avatar_angles missing angles: {missing}")
-            return result
         except Exception as exc:
-            logger.error("generate_angle_views failed: %s", exc)
-            raise ValueError(f"Angle view generation failed: {exc}") from exc
+            logger.error("apply_correction failed (%s): %s", submission_id, exc)
+            raise ValueError(
+                f"Coach correction failed for submission '{submission_id}': {exc}"
+            ) from exc
 
     def get_mock_skeleton_data(self, submission_id: str) -> Dict[str, Any]:
         """
         Return a realistic full skeleton dataset for testing without Specialist 3.
-        Format mirrors what detect_skeleton_from_video would return for a 30-frame swing.
+        Format mirrors the skeleton_json returned by run_full_pipeline().
         """
         return {
             "submission_id": submission_id,
             "source": "mock",
-            "image_frames": [
-                {
-                    "angle": angle,
-                    **self._mock_single_frame(angle=angle),
-                }
-                for angle in ("front", "left", "right", "back")
-            ],
-            "video_frames": self._mock_video_frames(num_frames=30),
+            "frames": self._mock_video_frames(num_frames=30),
         }
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _normalise_joints(raw: Any) -> Dict[str, Any]:
-        """
-        Coerce whatever Specialist 3 returns into our canonical joint format.
-        Handles both list-of-dicts and dict-with-landmarks styles.
-        """
-        if isinstance(raw, dict) and "joints" in raw:
-            joints = raw["joints"]
-        elif isinstance(raw, list):
-            joints = raw
-        else:
-            joints = []
-
-        normalised = []
-        for idx, j in enumerate(joints):
-            normalised.append({
-                "id": j.get("id", idx),
-                "name": j.get("name", _LANDMARK_NAMES[idx] if idx < 33 else f"joint_{idx}"),
-                "x": float(j.get("x", 0.0)),
-                "y": float(j.get("y", 0.0)),
-                "z": float(j.get("z", 0.0)),
-                "confidence": float(j.get("confidence", j.get("visibility", 0.0))),
-            })
-        return {"joints": normalised}
+    def _mock_full_pipeline(self, submission_id: str) -> Dict[str, Any]:
+        """Return mock pipeline output in the same structure as the real pipeline."""
+        return {
+            "skeleton_json": {
+                "submission_id": submission_id,
+                "frames": self._mock_video_frames(num_frames=30),
+            },
+            "avatar_paths": {
+                "obj": "/tmp/mock_avatar.obj",
+                "glb": "/tmp/mock_avatar.glb",
+                "fbx": "/tmp/mock_avatar.fbx",
+            },
+            "render_paths": {
+                "top":   "/tmp/mock_view_top.png",
+                "front": "/tmp/mock_view_front.png",
+                "left":  "/tmp/mock_view_left.png",
+                "right": "/tmp/mock_view_right.png",
+                "back":  "/tmp/mock_view_back.png",
+            },
+            "key_frames":        {},
+            "swing_angles":      {},
+            "analysis_warnings": [],
+        }
 
     def _mock_single_frame(self, angle: str = "front") -> Dict[str, Any]:
         """Return one frame of mock joint data in golf address position."""
@@ -252,7 +252,6 @@ class MediaPipeClient:
 
         joints = []
         for idx, (x, y, z, conf) in enumerate(_GOLF_ADDRESS_JOINTS):
-            # Add tiny random jitter so data looks measured not copied
             joints.append({
                 "id": idx,
                 "name": _LANDMARK_NAMES[idx],
@@ -268,10 +267,8 @@ class MediaPipeClient:
         frames = []
         for i in range(num_frames):
             t = i / 30.0
-            # Simulate slight swing rotation over the clip
             swing_phase = math.sin(math.pi * t / (num_frames / 30.0))
             frame_data = self._mock_single_frame(angle="front")
-            # Apply small phase-based offsets to wrists to simulate swing
             for j in frame_data["joints"]:
                 if "wrist" in j["name"]:
                     j["x"] = round(j["x"] + swing_phase * 0.05, 5)

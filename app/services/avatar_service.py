@@ -190,7 +190,9 @@ class AvatarService:
             try:
                 skeleton_data = SkeletonData(
                     submission_id=avatar.submission_id,
-                    frames=avatar.skeleton_json.get("video_frames", []),
+                    # Real pipeline stores frames under "frames"; legacy mock data used "video_frames"
+                    frames=avatar.skeleton_json.get("frames")
+                           or avatar.skeleton_json.get("video_frames", []),
                 )
             except Exception:
                 skeleton_data = None

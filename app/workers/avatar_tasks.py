@@ -3,13 +3,11 @@ Celery task: full avatar generation pipeline.
 
 Pipeline steps:
   1. Download submission files from B2
-  2. Run MediaPipe on all 4 images
-  3. Run MediaPipe on video (non-critical — failure is logged, not fatal)
-  4. Generate 3-D avatar model
-  5. Render 5 angle-view PNGs
-  6. Upload all output files to B2
-  7. Persist URLs + skeleton JSON, advance statuses
-  8. Cleanup temp files (always, in finally)
+  2. Run Specialist 3 ML pipeline (skeleton + avatar + renders in one call)
+  3. Upload avatar model files to B2
+  4. Upload angle-view PNGs to B2
+  5. Persist URLs + skeleton JSON, advance statuses
+  6. Cleanup temp files (always, in finally)
 """
 
 import logging
@@ -192,104 +190,89 @@ def process_avatar_generation(self: Task, submission_id: str) -> Dict[str, Any]:
                 }
                 image_paths[angle_map[f.file_type]] = dest
 
-        logger.info("[%s] Step 1 complete — %d images, video=%s", submission_id, len(image_paths), video_path is not None)
+        logger.info(
+            "[%s] Step 1 complete — %d images, video=%s",
+            submission_id, len(image_paths), video_path is not None,
+        )
 
         # ----------------------------------------------------------------
-        # Step 2 — MediaPipe on images (required)
-        # ----------------------------------------------------------------
-        image_skeletons: Dict[str, Any] = {}
-        try:
-            for angle, img_path in image_paths.items():
-                result = mediapipe_client.detect_skeleton_from_image(img_path, angle)
-                image_skeletons[angle] = result
-        except ValueError as exc:
-            logger.error("[%s] Step 2 failed: %s", submission_id, exc)
-            _fail_avatar(db, submission_id, str(exc))
-            return {"status": "error", "reason": "mediapipe_image_failed"}
-
-        logger.info("[%s] Step 2 complete — skeleton detected from %d images.", submission_id, len(image_skeletons))
-
-        # ----------------------------------------------------------------
-        # Step 3 — MediaPipe on video (bonus — failure continues pipeline)
-        # ----------------------------------------------------------------
-        video_frames = []
-        if video_path:
-            try:
-                video_frames = mediapipe_client.detect_skeleton_from_video(video_path)
-                logger.info("[%s] Step 3 complete — %d video frames.", submission_id, len(video_frames))
-            except ValueError as exc:
-                logger.warning("[%s] Step 3 warning — video analysis failed (non-fatal): %s", submission_id, exc)
-
-        skeleton_data = {
-            "submission_id": submission_id,
-            "image_frames": [
-                {"angle": angle, **data} for angle, data in image_skeletons.items()
-            ],
-            "video_frames": video_frames,
-        }
-
-        # ----------------------------------------------------------------
-        # Step 4 — Generate 3-D avatar model
+        # Step 2 — Run full ML pipeline (skeleton + avatar + renders)
         # ----------------------------------------------------------------
         try:
-            model_paths = mediapipe_client.generate_avatar_model(skeleton_data)
+            pipeline_result = mediapipe_client.run_full_pipeline(
+                submission_id,
+                image_paths,
+                video_path or "",
+            )
         except ValueError as exc:
-            logger.error("[%s] Step 4 failed: %s", submission_id, exc)
+            logger.error("[%s] Step 2 ML pipeline failed: %s", submission_id, exc)
             _fail_avatar(db, submission_id, str(exc))
-            return {"status": "error", "reason": "avatar_model_failed"}
+            return {"status": "error", "reason": "ml_pipeline_failed"}
 
-        logger.info("[%s] Step 4 complete — model generated.", submission_id)
+        skeleton_data  = pipeline_result["skeleton_json"]
+        avatar_paths   = pipeline_result["avatar_paths"]   # {obj, glb, fbx}
+        render_paths   = pipeline_result["render_paths"]   # {top, front, left, right, back}
+        warnings       = pipeline_result.get("analysis_warnings", [])
 
-        # Upload model files to B2
+        if warnings:
+            logger.warning("[%s] Pipeline warnings: %s", submission_id, warnings)
+
+        logger.info(
+            "[%s] Step 2 complete — pipeline finished, %d warning(s).",
+            submission_id, len(warnings),
+        )
+
+        # ----------------------------------------------------------------
+        # Step 3 — Upload avatar model files to B2
+        # ----------------------------------------------------------------
         user_id = str(submission.user_id)
         model_urls: Dict[str, str] = {}
-        for fmt, local_path in model_paths.items():
-            if not os.path.exists(local_path):
+
+        for fmt, local_path in avatar_paths.items():
+            if not local_path or not os.path.exists(local_path):
                 continue
             with open(local_path, "rb") as fh:
                 data = fh.read()
             ext = os.path.splitext(local_path)[1]
-            dest = b2_service.build_destination_path(user_id, submission_id, f"avatar_{fmt}", f"avatar{ext}")
+            dest = b2_service.build_destination_path(
+                user_id, submission_id, f"avatar_{fmt}", f"avatar{ext}"
+            )
             try:
                 result = b2_service.upload_file(data, dest, f"model/{ext.lstrip('.')}")
                 model_urls[fmt] = result["file_url"]
             except RuntimeError as exc:
                 raise self.retry(exc=exc, countdown=60)
 
-        # ----------------------------------------------------------------
-        # Step 5 — Generate 5 angle-view PNGs
-        # ----------------------------------------------------------------
-        glb_path = model_paths.get("glb_path", model_paths.get("obj_path", ""))
-        try:
-            angle_view_paths = mediapipe_client.generate_angle_views(glb_path)
-        except ValueError as exc:
-            logger.error("[%s] Step 5 failed: %s", submission_id, exc)
-            _fail_avatar(db, submission_id, str(exc))
-            return {"status": "error", "reason": "angle_views_failed"}
+        logger.info("[%s] Step 3 complete — avatar model files uploaded.", submission_id)
 
-        logger.info("[%s] Step 5 complete — 5 angle views rendered.", submission_id)
-
-        # Upload angle PNGs to B2
+        # ----------------------------------------------------------------
+        # Step 4 — Upload angle-view PNGs to B2
+        # ----------------------------------------------------------------
         angle_urls: Dict[str, str] = {}
-        for angle, local_path in angle_view_paths.items():
-            if not os.path.exists(local_path):
+
+        for angle, local_path in render_paths.items():
+            if not local_path or not os.path.exists(local_path):
                 continue
             with open(local_path, "rb") as fh:
                 data = fh.read()
-            dest = b2_service.build_destination_path(user_id, submission_id, f"view_{angle}", "view.png")
+            dest = b2_service.build_destination_path(
+                user_id, submission_id, f"view_{angle}", "view.png"
+            )
             try:
                 result = b2_service.upload_file(data, dest, "image/png")
                 angle_urls[angle] = result["file_url"]
             except RuntimeError as exc:
                 raise self.retry(exc=exc, countdown=60)
 
+        logger.info("[%s] Step 4 complete — angle-view PNGs uploaded.", submission_id)
+
         # ----------------------------------------------------------------
-        # Step 6 — Persist everything
+        # Step 5 — Persist everything
         # ----------------------------------------------------------------
         avatar.skeleton_json  = skeleton_data
-        avatar.avatar_obj_url = model_urls.get("obj_path")
-        avatar.avatar_fbx_url = model_urls.get("fbx_path")
-        avatar.avatar_glb_url = model_urls.get("glb_path")
+        avatar.avatar_obj_url = model_urls.get("obj")
+        avatar.avatar_fbx_url = model_urls.get("fbx")
+        avatar.avatar_glb_url = model_urls.get("glb")
         avatar.view_top_url   = angle_urls.get("top")
         avatar.view_front_url = angle_urls.get("front")
         avatar.view_left_url  = angle_urls.get("left")
@@ -301,7 +284,7 @@ def process_avatar_generation(self: Task, submission_id: str) -> Dict[str, Any]:
         submission.status = SubmissionStatus.READY_FOR_REVIEW
         db.commit()
 
-        logger.info("[%s] Step 6 complete — DB updated, status=READY_FOR_REVIEW.", submission_id)
+        logger.info("[%s] Step 5 complete — DB updated, status=READY_FOR_REVIEW.", submission_id)
 
         # Send success email
         if submission.user:
@@ -326,7 +309,7 @@ def process_avatar_generation(self: Task, submission_id: str) -> Dict[str, Any]:
         return {"status": "error", "reason": str(exc)}
 
     finally:
-        # Step 7 — always clean up temp files
+        # Step 6 — always clean up temp files
         db.close()
         if tmp_dir and os.path.exists(tmp_dir):
             try:

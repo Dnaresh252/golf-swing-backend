@@ -12,6 +12,16 @@ Both return dicts that are mapped to our canonical structure in run_full_pipelin
 and apply_correction() below.
 """
 
+import os
+
+# Must be set BEFORE cv2 / mediapipe are imported.
+# On headless servers (Railway, Docker) there is no display.
+# QT_QPA_PLATFORM=offscreen stops Qt/cv2 from trying to connect to X11/XCB.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("DISPLAY", "")
+os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "0")
+os.environ.setdefault("MPLBACKEND", "Agg")
+
 import logging
 import math
 import random

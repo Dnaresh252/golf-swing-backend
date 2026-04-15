@@ -1,5 +1,9 @@
 [phases.setup]
-nixPkgs = ["ffmpeg", "xorg.libxcb", "xorg.libX11", "xorg.libXext"]
+nixPkgs = ["ffmpeg", "libxcb", "xorg.libX11", "xorg.libXext", "xorg.libxcb"]
 
 [variables]
 NIXPACKS_PYTHON_VERSION = "3.12"
+QT_QPA_PLATFORM = "offscreen"
+DISPLAY = ""
+OPENCV_IO_ENABLE_OPENEXR = "0"
+MPLBACKEND = "Agg"

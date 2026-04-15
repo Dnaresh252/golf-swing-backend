@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["ffmpeg"]
+nixPkgs = ["ffmpeg", "xorg.libxcb", "xorg.libX11", "xorg.libXext"]
 
 [variables]
 NIXPACKS_PYTHON_VERSION = "3.12"

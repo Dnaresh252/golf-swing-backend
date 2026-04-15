@@ -83,11 +83,12 @@ class MediaPipeClient:
             import app.integrations.ml_cv_engine.api_functions as specialist3_ml  # type: ignore
             self._specialist3 = specialist3_ml
             logger.info("specialist3_ml loaded — using real MediaPipe pipeline.")
-        except ImportError:
+        except Exception as exc:
             self._mock_mode = True
             logger.warning(
-                "specialist3_ml not found — MediaPipeClient running in MOCK MODE. "
-                "Real skeleton detection is disabled."
+                "specialist3_ml import failed — MediaPipeClient running in MOCK MODE. "
+                "Real skeleton detection is disabled. Error: %s: %s",
+                type(exc).__name__, exc,
             )
 
     # ------------------------------------------------------------------

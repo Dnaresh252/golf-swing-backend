@@ -1,5 +1,14 @@
 [phases.setup]
-nixPkgs = ["ffmpeg", "libxcb", "xorg.libX11", "xorg.libXext", "xorg.libxcb"]
+nixPkgs = ["ffmpeg"]
+aptPkgs = [
+  "libxcb1",
+  "libx11-6",
+  "libxext6",
+  "libgl1",
+  "libglib2.0-0",
+  "libsm6",
+  "libxrender1"
+]
 
 [variables]
 NIXPACKS_PYTHON_VERSION = "3.12"

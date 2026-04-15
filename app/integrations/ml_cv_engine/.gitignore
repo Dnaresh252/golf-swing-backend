@@ -1,0 +1,5 @@
+# Large binary test assets — not tracked in git
+tests/sample_videos/
+tests/sample_images/
+models/*.task
+models/*.tflite

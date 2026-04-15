@@ -83,6 +83,8 @@ sendgrid==6.12.5
 six==1.17.0
 slowapi==0.1.9
 sounddevice==0.5.5
+scipy==1.17.1
+trimesh==4.11.5
 SQLAlchemy==2.0.48
 starlette==1.0.0
 typing-inspection==0.4.2

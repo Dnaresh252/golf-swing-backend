@@ -23,6 +23,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 RUN chmod +x start.sh
 
+CMD ["/bin/sh", "start.sh"]
+
 # Tell Qt/opencv not to open a display window.
 # Must match the env vars set in mediapipe_client.py.
 ENV QT_QPA_PLATFORM=offscreen

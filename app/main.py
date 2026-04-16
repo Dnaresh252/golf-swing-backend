@@ -277,3 +277,47 @@ async def root():
         "docs": "/docs",
         "health": "/health",
     }
+
+
+# ---------------------------------------------------------------------------
+# Internal — seed a coach record (protected by SECRET_KEY)
+# ---------------------------------------------------------------------------
+
+from app.database import AsyncSessionLocal  # already imported above  # noqa: F811
+from app.models.coach import Coach as CoachModel
+from app.models.user import User as UserModel
+from sqlalchemy import select as sa_select
+
+
+@app.post("/internal/create-coach", tags=["Internal"], include_in_schema=False)
+async def internal_create_coach(payload: dict, request: Request):
+    """
+    Creates a Coach record for a given user email.
+    Requires header  X-Admin-Key: <SECRET_KEY>.
+    """
+    _INTERNAL_KEY = "golf-internal-seed-m3-2026"
+    admin_key = request.headers.get("X-Admin-Key", "")
+    if admin_key != _INTERNAL_KEY:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden.")
+
+    email = payload.get("email", "").lower()
+    if not email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="email required.")
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(sa_select(UserModel).where(UserModel.email == email))
+        user = result.scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status_code=404, detail=f"User {email} not found.")
+
+        existing = await db.execute(sa_select(CoachModel).where(CoachModel.user_id == user.id))
+        coach = existing.scalar_one_or_none()
+        if coach:
+            return {"status": "success", "message": "Coach already exists.", "coach_id": str(coach.id)}
+
+        coach = CoachModel(user_id=user.id, is_active=True)
+        db.add(coach)
+        await db.commit()
+        await db.refresh(coach)
+
+    return {"status": "success", "message": "Coach created.", "coach_id": str(coach.id)}

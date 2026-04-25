@@ -284,18 +284,18 @@ async def root():
 # ---------------------------------------------------------------------------
 
 from app.database import AsyncSessionLocal  # already imported above  # noqa: F811
+from app.models.avatar import Avatar as AvatarModel, AvatarStatus as AvatarStatusEnum
 from app.models.coach import Coach as CoachModel
+from app.models.submission import Submission as SubmissionModel, SubmissionStatus
 from app.models.user import User as UserModel
 from sqlalchemy import select as sa_select
+
+_INTERNAL_KEY = "golf-internal-seed-m3-2026"
 
 
 @app.post("/internal/create-coach", tags=["Internal"], include_in_schema=False)
 async def internal_create_coach(payload: dict, request: Request):
-    """
-    Creates a Coach record for a given user email.
-    Requires header  X-Admin-Key: <SECRET_KEY>.
-    """
-    _INTERNAL_KEY = "golf-internal-seed-m3-2026"
+    """Creates a Coach record for a given user email. Requires X-Admin-Key header."""
     admin_key = request.headers.get("X-Admin-Key", "")
     if admin_key != _INTERNAL_KEY:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden.")
@@ -321,3 +321,143 @@ async def internal_create_coach(payload: dict, request: Request):
         await db.refresh(coach)
 
     return {"status": "success", "message": "Coach created.", "coach_id": str(coach.id)}
+
+
+@app.post("/internal/seed-test-submission", tags=["Internal"], include_in_schema=False)
+async def internal_seed_test_submission(payload: dict, request: Request):
+    """
+    Creates a test user + submission + avatar record with realistic golf skeleton data.
+    Requires X-Admin-Key header.
+    Returns submission_id for Specialist 4 Unity testing.
+    """
+    admin_key = request.headers.get("X-Admin-Key", "")
+    if admin_key != _INTERNAL_KEY:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden.")
+
+    import uuid as _uuid
+    from app.utils.security import hash_password
+
+    email = payload.get("email", "specialist4_testuser@golftest.com").lower()
+    password = payload.get("password", "Test@1234")
+
+    # 33-joint MediaPipe golf pose (address position — realistic T-pose rotated)
+    GOLF_SKELETON = {
+        "frames": [
+            {
+                "frame_index": 0,
+                "joints": [
+                    # Head/face landmarks (0-10)
+                    {"id": 0,  "name": "nose",              "x": 0.50, "y": 0.12, "z": 0.00, "visibility": 0.99},
+                    {"id": 1,  "name": "left_eye_inner",    "x": 0.52, "y": 0.11, "z":-0.01, "visibility": 0.98},
+                    {"id": 2,  "name": "left_eye",          "x": 0.54, "y": 0.11, "z":-0.01, "visibility": 0.98},
+                    {"id": 3,  "name": "left_eye_outer",    "x": 0.56, "y": 0.11, "z":-0.01, "visibility": 0.97},
+                    {"id": 4,  "name": "right_eye_inner",   "x": 0.48, "y": 0.11, "z":-0.01, "visibility": 0.98},
+                    {"id": 5,  "name": "right_eye",         "x": 0.46, "y": 0.11, "z":-0.01, "visibility": 0.98},
+                    {"id": 6,  "name": "right_eye_outer",   "x": 0.44, "y": 0.11, "z":-0.01, "visibility": 0.97},
+                    {"id": 7,  "name": "left_ear",          "x": 0.57, "y": 0.12, "z":-0.03, "visibility": 0.95},
+                    {"id": 8,  "name": "right_ear",         "x": 0.43, "y": 0.12, "z":-0.03, "visibility": 0.95},
+                    {"id": 9,  "name": "mouth_left",        "x": 0.52, "y": 0.14, "z":-0.01, "visibility": 0.97},
+                    {"id": 10, "name": "mouth_right",       "x": 0.48, "y": 0.14, "z":-0.01, "visibility": 0.97},
+                    # Shoulders
+                    {"id": 11, "name": "left_shoulder",     "x": 0.60, "y": 0.25, "z": 0.00, "visibility": 0.99},
+                    {"id": 12, "name": "right_shoulder",    "x": 0.40, "y": 0.25, "z": 0.00, "visibility": 0.99},
+                    # Elbows
+                    {"id": 13, "name": "left_elbow",        "x": 0.65, "y": 0.38, "z": 0.05, "visibility": 0.98},
+                    {"id": 14, "name": "right_elbow",       "x": 0.35, "y": 0.38, "z": 0.05, "visibility": 0.98},
+                    # Wrists
+                    {"id": 15, "name": "left_wrist",        "x": 0.62, "y": 0.50, "z": 0.10, "visibility": 0.97},
+                    {"id": 16, "name": "right_wrist",       "x": 0.38, "y": 0.50, "z": 0.10, "visibility": 0.97},
+                    # Hands
+                    {"id": 17, "name": "left_pinky",        "x": 0.61, "y": 0.53, "z": 0.11, "visibility": 0.90},
+                    {"id": 18, "name": "right_pinky",       "x": 0.39, "y": 0.53, "z": 0.11, "visibility": 0.90},
+                    {"id": 19, "name": "left_index",        "x": 0.63, "y": 0.53, "z": 0.12, "visibility": 0.91},
+                    {"id": 20, "name": "right_index",       "x": 0.37, "y": 0.53, "z": 0.12, "visibility": 0.91},
+                    {"id": 21, "name": "left_thumb",        "x": 0.64, "y": 0.52, "z": 0.11, "visibility": 0.89},
+                    {"id": 22, "name": "right_thumb",       "x": 0.36, "y": 0.52, "z": 0.11, "visibility": 0.89},
+                    # Hips
+                    {"id": 23, "name": "left_hip",          "x": 0.56, "y": 0.55, "z": 0.00, "visibility": 0.99},
+                    {"id": 24, "name": "right_hip",         "x": 0.44, "y": 0.55, "z": 0.00, "visibility": 0.99},
+                    # Knees
+                    {"id": 25, "name": "left_knee",         "x": 0.57, "y": 0.72, "z": 0.02, "visibility": 0.98},
+                    {"id": 26, "name": "right_knee",        "x": 0.43, "y": 0.72, "z": 0.02, "visibility": 0.98},
+                    # Ankles
+                    {"id": 27, "name": "left_ankle",        "x": 0.57, "y": 0.88, "z": 0.01, "visibility": 0.97},
+                    {"id": 28, "name": "right_ankle",       "x": 0.43, "y": 0.88, "z": 0.01, "visibility": 0.97},
+                    # Feet
+                    {"id": 29, "name": "left_heel",         "x": 0.56, "y": 0.90, "z":-0.01, "visibility": 0.95},
+                    {"id": 30, "name": "right_heel",        "x": 0.44, "y": 0.90, "z":-0.01, "visibility": 0.95},
+                    {"id": 31, "name": "left_foot_index",   "x": 0.58, "y": 0.92, "z": 0.03, "visibility": 0.94},
+                    {"id": 32, "name": "right_foot_index",  "x": 0.42, "y": 0.92, "z": 0.03, "visibility": 0.94},
+                ]
+            }
+        ],
+        "swing_angles": {
+            "left_elbow":    145.2,
+            "right_elbow":   148.7,
+            "left_knee":     162.4,
+            "right_knee":    164.1,
+            "left_shoulder":  82.3,
+            "right_shoulder": 79.8,
+            "hip_rotation":   18.5,
+            "spine_tilt":     12.3,
+        },
+        "analysis_warnings": [],
+        "frame_count": 1,
+        "source": "seed_data_specialist4",
+    }
+
+    PLACEHOLDER_BASE = "https://f005.backblazeb2.com/file/golf-swing-test"
+
+    async with AsyncSessionLocal() as db:
+        # Get or create test user
+        result = await db.execute(sa_select(UserModel).where(UserModel.email == email))
+        user = result.scalar_one_or_none()
+        if user is None:
+            user = UserModel(
+                email=email,
+                password_hash=hash_password(password),
+                name=payload.get("name", "Specialist 4 Test User"),
+            )
+            db.add(user)
+            await db.flush()
+            await db.refresh(user)
+
+        # Create submission in READY_FOR_REVIEW so coach can pull it from queue
+        submission = SubmissionModel(
+            user_id=user.id,
+            status=SubmissionStatus.READY_FOR_REVIEW,
+        )
+        db.add(submission)
+        await db.flush()
+        await db.refresh(submission)
+
+        # Create avatar with full sample data
+        avatar = AvatarModel(
+            submission_id=submission.id,
+            skeleton_json=GOLF_SKELETON,
+            avatar_obj_url=f"{PLACEHOLDER_BASE}/avatar_{submission.id}.obj",
+            avatar_fbx_url=f"{PLACEHOLDER_BASE}/avatar_{submission.id}.fbx",
+            avatar_glb_url=f"{PLACEHOLDER_BASE}/avatar_{submission.id}.glb",
+            view_top_url=f"{PLACEHOLDER_BASE}/render_{submission.id}_top.png",
+            view_front_url=f"{PLACEHOLDER_BASE}/render_{submission.id}_front.png",
+            view_left_url=f"{PLACEHOLDER_BASE}/render_{submission.id}_left.png",
+            view_right_url=f"{PLACEHOLDER_BASE}/render_{submission.id}_right.png",
+            view_back_url=f"{PLACEHOLDER_BASE}/render_{submission.id}_back.png",
+            status=AvatarStatusEnum.COMPLETED,
+        )
+        db.add(avatar)
+        await db.commit()
+
+    return {
+        "status": "success",
+        "message": "Test submission created with skeleton + avatar data.",
+        "submission_id": str(submission.id),
+        "avatar_id": str(avatar.id),
+        "user_email": email,
+        "submission_status": submission.status.value,
+        "avatar_status": avatar.status.value,
+        "glb_url": avatar.avatar_glb_url,
+        "fbx_url": avatar.avatar_fbx_url,
+        "obj_url": avatar.avatar_obj_url,
+        "joint_count": len(GOLF_SKELETON["frames"][0]["joints"]),
+    }

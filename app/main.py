@@ -461,3 +461,118 @@ async def internal_seed_test_submission(payload: dict, request: Request):
         "obj_url": avatar.avatar_obj_url,
         "joint_count": len(GOLF_SKELETON["frames"][0]["joints"]),
     }
+
+
+@app.post("/internal/upload-avatar-fbx", tags=["Internal"], include_in_schema=False)
+async def internal_upload_avatar_fbx(payload: dict, request: Request):
+    """
+    Upload a base64-encoded FBX file to Backblaze B2 via the Railway server.
+    Requires X-Admin-Key header.
+
+    Body:
+      b2_path     (str)  — destination path in B2, e.g. assets/avatars/male_skinny/avatar.fbx
+      file_base64 (str)  — base64-encoded file bytes
+    """
+    import base64
+    import asyncio
+
+    admin_key = request.headers.get("X-Admin-Key", "")
+    if admin_key != _INTERNAL_KEY:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden.")
+
+    b2_path = payload.get("b2_path", "").strip()
+    file_b64 = payload.get("file_base64", "").strip()
+
+    if not b2_path:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="b2_path required.")
+    if not file_b64:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="file_base64 required.")
+
+    try:
+        file_bytes = base64.b64decode(file_b64)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid base64 in file_base64.")
+
+    # b2_service.upload_file is synchronous — run in thread pool to avoid blocking event loop
+    from app.integrations.backblaze import b2_service
+    try:
+        result = await asyncio.to_thread(
+            b2_service.upload_file,
+            file_bytes,
+            b2_path,
+            "model/fbx",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"B2 upload failed: {exc}",
+        )
+
+    return {
+        "status": "success",
+        "message": f"File uploaded to B2 at '{b2_path}'.",
+        "b2_path": b2_path,
+        "file_url": result["file_url"],
+        "b2_file_id": result["b2_file_id"],
+        "file_size_bytes": result["file_size"],
+    }
+
+
+@app.post("/internal/update-avatar-fbx-urls", tags=["Internal"], include_in_schema=False)
+async def internal_update_avatar_fbx_urls(payload: dict, request: Request):
+    """
+    Update FBX/GLB/OBJ URLs on an existing avatar record.
+    Requires X-Admin-Key header.
+
+    Body:
+      submission_id  (str)           — UUID of the submission
+      avatar_fbx_url (str)           — required
+      avatar_glb_url (str, optional)
+      avatar_obj_url (str, optional)
+    """
+    import uuid as _uuid
+
+    admin_key = request.headers.get("X-Admin-Key", "")
+    if admin_key != _INTERNAL_KEY:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden.")
+
+    submission_id_str = payload.get("submission_id", "").strip()
+    fbx_url = payload.get("avatar_fbx_url", "").strip()
+
+    if not submission_id_str:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="submission_id required.")
+    if not fbx_url:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="avatar_fbx_url required.")
+
+    try:
+        submission_uuid = _uuid.UUID(submission_id_str)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="submission_id is not a valid UUID.")
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            sa_select(AvatarModel).where(AvatarModel.submission_id == submission_uuid)
+        )
+        avatar = result.scalar_one_or_none()
+        if avatar is None:
+            raise HTTPException(status_code=404, detail=f"No avatar found for submission {submission_id_str}.")
+
+        avatar.avatar_fbx_url = fbx_url
+        if payload.get("avatar_glb_url"):
+            avatar.avatar_glb_url = payload["avatar_glb_url"].strip()
+        if payload.get("avatar_obj_url"):
+            avatar.avatar_obj_url = payload["avatar_obj_url"].strip()
+
+        await db.commit()
+        await db.refresh(avatar)
+
+    return {
+        "status": "success",
+        "message": "Avatar URLs updated.",
+        "submission_id": submission_id_str,
+        "avatar_id": str(avatar.id),
+        "avatar_fbx_url": avatar.avatar_fbx_url,
+        "avatar_glb_url": avatar.avatar_glb_url,
+        "avatar_obj_url": avatar.avatar_obj_url,
+        "avatar_status": avatar.status.value,
+    }

@@ -344,50 +344,51 @@ async def internal_seed_test_submission(payload: dict, request: Request):
     GOLF_SKELETON = {
         "frames": [
             {
-                "frame_index": 0,
+                "frame_num": 0,
+                "timestamp": 0.0,
                 "joints": [
                     # Head/face landmarks (0-10)
-                    {"id": 0,  "name": "nose",              "x": 0.50, "y": 0.12, "z": 0.00, "visibility": 0.99},
-                    {"id": 1,  "name": "left_eye_inner",    "x": 0.52, "y": 0.11, "z":-0.01, "visibility": 0.98},
-                    {"id": 2,  "name": "left_eye",          "x": 0.54, "y": 0.11, "z":-0.01, "visibility": 0.98},
-                    {"id": 3,  "name": "left_eye_outer",    "x": 0.56, "y": 0.11, "z":-0.01, "visibility": 0.97},
-                    {"id": 4,  "name": "right_eye_inner",   "x": 0.48, "y": 0.11, "z":-0.01, "visibility": 0.98},
-                    {"id": 5,  "name": "right_eye",         "x": 0.46, "y": 0.11, "z":-0.01, "visibility": 0.98},
-                    {"id": 6,  "name": "right_eye_outer",   "x": 0.44, "y": 0.11, "z":-0.01, "visibility": 0.97},
-                    {"id": 7,  "name": "left_ear",          "x": 0.57, "y": 0.12, "z":-0.03, "visibility": 0.95},
-                    {"id": 8,  "name": "right_ear",         "x": 0.43, "y": 0.12, "z":-0.03, "visibility": 0.95},
-                    {"id": 9,  "name": "mouth_left",        "x": 0.52, "y": 0.14, "z":-0.01, "visibility": 0.97},
-                    {"id": 10, "name": "mouth_right",       "x": 0.48, "y": 0.14, "z":-0.01, "visibility": 0.97},
+                    {"id": 0,  "name": "nose",              "x": 0.50, "y": 0.12, "z": 0.00, "confidence": 0.99},
+                    {"id": 1,  "name": "left_eye_inner",    "x": 0.52, "y": 0.11, "z":-0.01, "confidence": 0.98},
+                    {"id": 2,  "name": "left_eye",          "x": 0.54, "y": 0.11, "z":-0.01, "confidence": 0.98},
+                    {"id": 3,  "name": "left_eye_outer",    "x": 0.56, "y": 0.11, "z":-0.01, "confidence": 0.97},
+                    {"id": 4,  "name": "right_eye_inner",   "x": 0.48, "y": 0.11, "z":-0.01, "confidence": 0.98},
+                    {"id": 5,  "name": "right_eye",         "x": 0.46, "y": 0.11, "z":-0.01, "confidence": 0.98},
+                    {"id": 6,  "name": "right_eye_outer",   "x": 0.44, "y": 0.11, "z":-0.01, "confidence": 0.97},
+                    {"id": 7,  "name": "left_ear",          "x": 0.57, "y": 0.12, "z":-0.03, "confidence": 0.95},
+                    {"id": 8,  "name": "right_ear",         "x": 0.43, "y": 0.12, "z":-0.03, "confidence": 0.95},
+                    {"id": 9,  "name": "mouth_left",        "x": 0.52, "y": 0.14, "z":-0.01, "confidence": 0.97},
+                    {"id": 10, "name": "mouth_right",       "x": 0.48, "y": 0.14, "z":-0.01, "confidence": 0.97},
                     # Shoulders
-                    {"id": 11, "name": "left_shoulder",     "x": 0.60, "y": 0.25, "z": 0.00, "visibility": 0.99},
-                    {"id": 12, "name": "right_shoulder",    "x": 0.40, "y": 0.25, "z": 0.00, "visibility": 0.99},
+                    {"id": 11, "name": "left_shoulder",     "x": 0.60, "y": 0.25, "z": 0.00, "confidence": 0.99},
+                    {"id": 12, "name": "right_shoulder",    "x": 0.40, "y": 0.25, "z": 0.00, "confidence": 0.99},
                     # Elbows
-                    {"id": 13, "name": "left_elbow",        "x": 0.65, "y": 0.38, "z": 0.05, "visibility": 0.98},
-                    {"id": 14, "name": "right_elbow",       "x": 0.35, "y": 0.38, "z": 0.05, "visibility": 0.98},
+                    {"id": 13, "name": "left_elbow",        "x": 0.65, "y": 0.38, "z": 0.05, "confidence": 0.98},
+                    {"id": 14, "name": "right_elbow",       "x": 0.35, "y": 0.38, "z": 0.05, "confidence": 0.98},
                     # Wrists
-                    {"id": 15, "name": "left_wrist",        "x": 0.62, "y": 0.50, "z": 0.10, "visibility": 0.97},
-                    {"id": 16, "name": "right_wrist",       "x": 0.38, "y": 0.50, "z": 0.10, "visibility": 0.97},
+                    {"id": 15, "name": "left_wrist",        "x": 0.62, "y": 0.50, "z": 0.10, "confidence": 0.97},
+                    {"id": 16, "name": "right_wrist",       "x": 0.38, "y": 0.50, "z": 0.10, "confidence": 0.97},
                     # Hands
-                    {"id": 17, "name": "left_pinky",        "x": 0.61, "y": 0.53, "z": 0.11, "visibility": 0.90},
-                    {"id": 18, "name": "right_pinky",       "x": 0.39, "y": 0.53, "z": 0.11, "visibility": 0.90},
-                    {"id": 19, "name": "left_index",        "x": 0.63, "y": 0.53, "z": 0.12, "visibility": 0.91},
-                    {"id": 20, "name": "right_index",       "x": 0.37, "y": 0.53, "z": 0.12, "visibility": 0.91},
-                    {"id": 21, "name": "left_thumb",        "x": 0.64, "y": 0.52, "z": 0.11, "visibility": 0.89},
-                    {"id": 22, "name": "right_thumb",       "x": 0.36, "y": 0.52, "z": 0.11, "visibility": 0.89},
+                    {"id": 17, "name": "left_pinky",        "x": 0.61, "y": 0.53, "z": 0.11, "confidence": 0.90},
+                    {"id": 18, "name": "right_pinky",       "x": 0.39, "y": 0.53, "z": 0.11, "confidence": 0.90},
+                    {"id": 19, "name": "left_index",        "x": 0.63, "y": 0.53, "z": 0.12, "confidence": 0.91},
+                    {"id": 20, "name": "right_index",       "x": 0.37, "y": 0.53, "z": 0.12, "confidence": 0.91},
+                    {"id": 21, "name": "left_thumb",        "x": 0.64, "y": 0.52, "z": 0.11, "confidence": 0.89},
+                    {"id": 22, "name": "right_thumb",       "x": 0.36, "y": 0.52, "z": 0.11, "confidence": 0.89},
                     # Hips
-                    {"id": 23, "name": "left_hip",          "x": 0.56, "y": 0.55, "z": 0.00, "visibility": 0.99},
-                    {"id": 24, "name": "right_hip",         "x": 0.44, "y": 0.55, "z": 0.00, "visibility": 0.99},
+                    {"id": 23, "name": "left_hip",          "x": 0.56, "y": 0.55, "z": 0.00, "confidence": 0.99},
+                    {"id": 24, "name": "right_hip",         "x": 0.44, "y": 0.55, "z": 0.00, "confidence": 0.99},
                     # Knees
-                    {"id": 25, "name": "left_knee",         "x": 0.57, "y": 0.72, "z": 0.02, "visibility": 0.98},
-                    {"id": 26, "name": "right_knee",        "x": 0.43, "y": 0.72, "z": 0.02, "visibility": 0.98},
+                    {"id": 25, "name": "left_knee",         "x": 0.57, "y": 0.72, "z": 0.02, "confidence": 0.98},
+                    {"id": 26, "name": "right_knee",        "x": 0.43, "y": 0.72, "z": 0.02, "confidence": 0.98},
                     # Ankles
-                    {"id": 27, "name": "left_ankle",        "x": 0.57, "y": 0.88, "z": 0.01, "visibility": 0.97},
-                    {"id": 28, "name": "right_ankle",       "x": 0.43, "y": 0.88, "z": 0.01, "visibility": 0.97},
+                    {"id": 27, "name": "left_ankle",        "x": 0.57, "y": 0.88, "z": 0.01, "confidence": 0.97},
+                    {"id": 28, "name": "right_ankle",       "x": 0.43, "y": 0.88, "z": 0.01, "confidence": 0.97},
                     # Feet
-                    {"id": 29, "name": "left_heel",         "x": 0.56, "y": 0.90, "z":-0.01, "visibility": 0.95},
-                    {"id": 30, "name": "right_heel",        "x": 0.44, "y": 0.90, "z":-0.01, "visibility": 0.95},
-                    {"id": 31, "name": "left_foot_index",   "x": 0.58, "y": 0.92, "z": 0.03, "visibility": 0.94},
-                    {"id": 32, "name": "right_foot_index",  "x": 0.42, "y": 0.92, "z": 0.03, "visibility": 0.94},
+                    {"id": 29, "name": "left_heel",         "x": 0.56, "y": 0.90, "z":-0.01, "confidence": 0.95},
+                    {"id": 30, "name": "right_heel",        "x": 0.44, "y": 0.90, "z":-0.01, "confidence": 0.95},
+                    {"id": 31, "name": "left_foot_index",   "x": 0.58, "y": 0.92, "z": 0.03, "confidence": 0.94},
+                    {"id": 32, "name": "right_foot_index",  "x": 0.42, "y": 0.92, "z": 0.03, "confidence": 0.94},
                 ]
             }
         ],
@@ -480,8 +481,9 @@ async def internal_upload_avatar_fbx(payload: dict, request: Request):
     if admin_key != _INTERNAL_KEY:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden.")
 
-    b2_path = payload.get("b2_path", "").strip()
-    file_b64 = payload.get("file_base64", "").strip()
+    b2_path      = payload.get("b2_path", "").strip()
+    file_b64     = payload.get("file_base64", "").strip()
+    content_type = payload.get("content_type", "model/fbx").strip() or "model/fbx"
 
     if not b2_path:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="b2_path required.")
@@ -500,7 +502,7 @@ async def internal_upload_avatar_fbx(payload: dict, request: Request):
             b2_service.upload_file,
             file_bytes,
             b2_path,
-            "model/fbx",
+            content_type,
         )
     except Exception as exc:
         raise HTTPException(

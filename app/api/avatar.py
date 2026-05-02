@@ -2,11 +2,15 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import Response
+from sqlalchemy import select as _select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.avatar import AvatarStatus
+from app.models.coach import Coach
+from app.models.submission import Submission
 from app.models.user import User
 from app.schemas.avatar import AvatarAngleResponse, AvatarResponse, SkeletonData
 from app.services.avatar_service import avatar_service
@@ -85,7 +89,7 @@ async def get_skeleton(
     try:
         skeleton = SkeletonData(
             submission_id=submission_id,
-            frames=skeleton_json.get("video_frames", []),
+            frames=skeleton_json.get("frames", []),
         )
         data = skeleton.model_dump()
     except Exception:
@@ -142,3 +146,105 @@ async def get_angle_view(
             image_url=view["image_url"],
         ).model_dump(),
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /submissions/{id}/avatar/download/{file_type}
+# ---------------------------------------------------------------------------
+
+_CONTENT_TYPES = {
+    "glb": "model/gltf-binary",
+    "fbx": "model/fbx",
+    "obj": "text/plain",
+}
+
+_URL_ATTR = {
+    "glb": "avatar_glb_url",
+    "fbx": "avatar_fbx_url",
+    "obj": "avatar_obj_url",
+}
+
+
+@router.get(
+    "/{submission_id}/avatar/download/{file_type}",
+    summary="Proxy-download GLB/FBX/OBJ from B2 (requires auth)",
+)
+async def download_avatar_file(
+    submission_id: uuid.UUID,
+    file_type: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    import httpx
+
+    rid = _request_id(request)
+    file_type = file_type.lower()
+
+    if file_type not in _CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "status": "error",
+                "message": "file_type must be glb, fbx, or obj",
+                "request_id": rid,
+            },
+        )
+
+    # Ownership check: submission owner OR any active coach
+    sub_result = await db.execute(
+        _select(Submission.user_id).where(Submission.id == submission_id)
+    )
+    sub_row = sub_result.one_or_none()
+    if sub_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Submission not found.",
+        )
+
+    if sub_row.user_id != current_user.id:
+        coach_result = await db.execute(
+            _select(Coach).where(
+                Coach.user_id == current_user.id,
+                Coach.is_active == True,
+            )
+        )
+        if coach_result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Submission not found.",
+            )
+
+    # Get avatar record
+    avatar = await avatar_service._get_avatar_for_submission(db, submission_id)
+    if avatar is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Avatar not ready yet.",
+        )
+
+    file_url = getattr(avatar, _URL_ATTR[file_type], None)
+    if not file_url:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No {file_type.upper()} file available for this submission.",
+        )
+
+    # Fetch from B2 and proxy back to client
+    async with httpx.AsyncClient(timeout=120) as client:
+        b2_resp = await client.get(file_url)
+
+    if b2_resp.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Storage returned HTTP {b2_resp.status_code}.",
+        )
+
+    logger.info("File download proxied for submission %s type=%s", submission_id, file_type)
+    return Response(
+        content=b2_resp.content,
+        media_type=_CONTENT_TYPES[file_type],
+        headers={
+            "Content-Disposition": f'attachment; filename="avatar_{submission_id}.{file_type}"',
+        },
+    )

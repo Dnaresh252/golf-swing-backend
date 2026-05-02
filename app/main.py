@@ -55,12 +55,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 from app.api import (  # noqa: E402
+    admin,
     auth,
     auth_social,
     avatar,
     coach,
     corrections,
     discounts,
+    payments,
     practice,
     social,
     submissions,
@@ -240,6 +242,8 @@ app.include_router(corrections.router, prefix=f"{API_PREFIX}/corrections",  tags
 app.include_router(practice.router,    prefix=f"{API_PREFIX}/practice",     tags=["Practice"])
 app.include_router(social.router,      prefix=f"{API_PREFIX}/social",       tags=["Social"])
 app.include_router(discounts.router,   prefix=f"{API_PREFIX}/discounts",    tags=["Discounts"])
+app.include_router(payments.router,    prefix=f"{API_PREFIX}/payments",     tags=["Payments"])
+app.include_router(admin.router,       prefix=f"{API_PREFIX}/admin",        tags=["Admin"])
 
 
 # ---------------------------------------------------------------------------

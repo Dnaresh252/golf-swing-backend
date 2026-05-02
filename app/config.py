@@ -126,6 +126,14 @@ class Settings(BaseSettings):
     DISCOUNT_PERCENTAGE: int = 15
     DISCOUNT_VALIDITY_DAYS: int = 30
 
+    # Stripe
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_PUBLISHABLE_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_CURRENCY: str = "usd"
+    SUBMISSION_PRICE_CENTS: int = 2500
+    COACH_PAYOUT_CENTS: int = 1000
+
     # Celery workers
     CELERY_WORKER_CONCURRENCY: int = 4
     CELERY_TASK_TIMEOUT: int = 300

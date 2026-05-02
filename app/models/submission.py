@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from app.models.coach_notes import CoachNotes
     from app.models.correction import CorrectedVideo
     from app.models.discount import DiscountCode
+    from app.models.payment import Payment
     from app.models.results import ResultsVideo
     from app.models.social import SocialSharing
     from app.models.submission_file import SubmissionFile
@@ -101,6 +102,11 @@ class Submission(Base):
     )
     discount_codes: Mapped[List["DiscountCode"]] = relationship(
         "DiscountCode", back_populates="submission", cascade="all, delete-orphan"
+    )
+    payment: Mapped[Optional["Payment"]] = relationship(
+        "Payment",
+        back_populates="submission",
+        uselist=False,
     )
 
     __table_args__ = (

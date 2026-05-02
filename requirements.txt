@@ -79,6 +79,7 @@ requests==2.33.1
 requests-oauthlib==2.0.0
 rsa==4.9.1
 sendgrid==6.12.5
+stripe==11.5.0
 six==1.17.0
 slowapi==0.1.9
 sounddevice==0.5.5

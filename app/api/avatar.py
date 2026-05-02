@@ -176,8 +176,6 @@ async def download_avatar_file(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    import httpx
-
     rid = _request_id(request)
     file_type = file_type.lower()
 
@@ -230,19 +228,22 @@ async def download_avatar_file(
             detail=f"No {file_type.upper()} file available for this submission.",
         )
 
-    # Fetch from B2 and proxy back to client
-    async with httpx.AsyncClient(timeout=120) as client:
-        b2_resp = await client.get(file_url)
+    # Fetch from B2 with auth token and proxy back to client
+    import asyncio
+    from app.integrations.backblaze import b2_service
 
-    if b2_resp.status_code != 200:
+    try:
+        file_bytes = await asyncio.to_thread(b2_service.download_file_bytes, file_url)
+    except Exception as exc:
+        logger.error("B2 fetch failed for submission %s type=%s: %s", submission_id, file_type, exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Storage returned HTTP {b2_resp.status_code}.",
+            detail=f"Storage fetch failed: {exc}",
         )
 
     logger.info("File download proxied for submission %s type=%s", submission_id, file_type)
     return Response(
-        content=b2_resp.content,
+        content=file_bytes,
         media_type=_CONTENT_TYPES[file_type],
         headers={
             "Content-Disposition": f'attachment; filename="avatar_{submission_id}.{file_type}"',

@@ -132,6 +132,18 @@ class BackblazeService:
         bucket = self._get_bucket()
         return f"https://f{settings.B2_BUCKET_ID}.backblazeb2.com/file/{settings.B2_BUCKET_NAME}/{file_name}"
 
+    def download_file_bytes(self, file_url: str) -> bytes:
+        """
+        Download a private B2 file and return its raw bytes.
+        Uses the SDK auth token so the bucket does not need to be public.
+        """
+        import requests as _requests
+        self._get_bucket()  # ensure connected + auth token is fresh
+        auth_token = self._api.account_info.get_account_auth_token()
+        resp = _requests.get(file_url, headers={"Authorization": auth_token}, timeout=120)
+        resp.raise_for_status()
+        return resp.content
+
     def validate_connection(self) -> bool:
         """
         Test the B2 connection and bucket access.

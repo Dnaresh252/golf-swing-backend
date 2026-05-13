@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -41,6 +41,13 @@ class Avatar(Base):
     view_left_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     view_right_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     view_back_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    skin_tone_value: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    body_thickness_value: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    attire_selection: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    shoe_color_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    headgear_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     status: Mapped[AvatarStatus] = mapped_column(
         Enum(AvatarStatus, name="avatarstatus"),
         nullable=False,

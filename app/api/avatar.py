@@ -12,7 +12,7 @@ from app.models.avatar import AvatarStatus
 from app.models.coach import Coach
 from app.models.submission import Submission
 from app.models.user import User
-from app.schemas.avatar import AvatarAngleResponse, AvatarResponse, SkeletonData
+from app.schemas.avatar import AvatarAngleResponse, AvatarCustomizationRequest, AvatarResponse, SkeletonData
 from app.services.avatar_service import avatar_service
 
 logger = logging.getLogger(__name__)
@@ -249,3 +249,47 @@ async def download_avatar_file(
             "Content-Disposition": f'attachment; filename="avatar_{submission_id}.{file_type}"',
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# PATCH /submissions/{id}/avatar/customization
+# ---------------------------------------------------------------------------
+
+@router.patch(
+    "/{submission_id}/avatar/customization",
+    summary="Update avatar customization sliders (skin tone, body, attire, shoe color)",
+)
+async def update_avatar_customization(
+    submission_id: uuid.UUID,
+    body: AvatarCustomizationRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rid = _request_id(request)
+
+    update_data = body.model_dump(exclude_none=True)
+    if not update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "status": "error",
+                "message": "No customization fields provided.",
+                "request_id": rid,
+            },
+        )
+
+    avatar = await avatar_service.get_avatar(db, submission_id, current_user.id)
+
+    for field, value in update_data.items():
+        setattr(avatar, field, value)
+
+    await db.commit()
+    await db.refresh(avatar)
+
+    logger.info("Avatar customization updated for submission: %s", submission_id)
+    return {
+        "status": "success",
+        "message": "Avatar customization updated.",
+        "data": avatar_service.build_avatar_response(avatar).model_dump(),
+    }

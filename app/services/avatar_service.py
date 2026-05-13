@@ -205,6 +205,11 @@ class AvatarService:
             avatar_glb_url=avatar.avatar_glb_url,
             avatar_fbx_url=avatar.avatar_fbx_url,
             angles=angles,
+            skin_tone_value=avatar.skin_tone_value,
+            body_thickness_value=avatar.body_thickness_value,
+            attire_selection=avatar.attire_selection,
+            shoe_color_value=avatar.shoe_color_value,
+            headgear_enabled=avatar.headgear_enabled,
             error_message=avatar.error_message,
             created_at=avatar.created_at,
         )

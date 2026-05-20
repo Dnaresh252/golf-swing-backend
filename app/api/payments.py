@@ -44,6 +44,7 @@ def _configure_stripe() -> None:
 class CreateIntentRequest(BaseModel):
     submission_id: Optional[uuid.UUID] = None
     discount_code: Optional[str] = None
+    skip_free_option: Optional[bool] = False
 
 
 class PaymentRecord(BaseModel):
@@ -104,7 +105,7 @@ async def create_payment_intent(
     )
     social_count: int = social_count_row.scalar() or 0
 
-    if completed_count == 0 and social_count > 0:
+    if completed_count == 0 and social_count > 0 and not body.skip_free_option:
         amount_cents = 0
         free_reason = "social_share_first_submission"
 

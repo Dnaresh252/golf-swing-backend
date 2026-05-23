@@ -1,4 +1,5 @@
 import logging
+import secrets
 from typing import Optional, Tuple
 
 import redis.asyncio as aioredis
@@ -250,6 +251,69 @@ class AuthService:
             logger.info("Welcome email sent to: %s", user.email)
         except Exception as exc:
             logger.warning("Failed to send welcome email to %s: %s", user.email, exc)
+
+    async def send_password_reset_email(self, user: User, reset_token: str) -> None:
+        """Send password reset email. Never raises."""
+        try:
+            from sendgrid import SendGridAPIClient
+            from sendgrid.helpers.mail import Content, Mail
+
+            reset_link = f"{settings.FRONTEND_URL}/reset-password?token={reset_token}"
+            message = Mail(
+                from_email=(settings.SENDGRID_FROM_EMAIL, settings.SENDGRID_FROM_NAME),
+                to_emails=user.email,
+            )
+            if settings.SENDGRID_RESET_PASSWORD_TEMPLATE:
+                message.template_id = settings.SENDGRID_RESET_PASSWORD_TEMPLATE
+                message.dynamic_template_data = {
+                    "name": user.name,
+                    "reset_link": reset_link,
+                    "app_name": settings.APP_NAME,
+                }
+            else:
+                message.subject = f"Reset your {settings.APP_NAME} password"
+                message.add_content(Content(
+                    "text/plain",
+                    f"Hi {user.name},\n\nReset your password (expires in 1 hour):\n\n{reset_link}\n\n"
+                    f"If you didn't request this, ignore this email.\n\n— {settings.APP_NAME}",
+                ))
+            SendGridAPIClient(settings.SENDGRID_API_KEY).send(message)
+            logger.info("Password reset email sent to: %s", user.email)
+        except Exception as exc:
+            logger.warning("Failed to send password reset email to %s: %s", user.email, exc)
+
+    async def forgot_password(self, db: AsyncSession, email: str) -> None:
+        """
+        Generate a reset token and email it.
+        Silently no-ops if email not found to prevent user enumeration.
+        """
+        result = await db.execute(select(User).where(User.email == email.lower()))
+        user: Optional[User] = result.scalar_one_or_none()
+        if user is None or not user.is_active:
+            return
+
+        token = secrets.token_urlsafe(32)
+        r = _get_redis()
+        await r.set(f"pwd_reset:{token}", str(user.id), ex=3600)
+        await self.send_password_reset_email(user, token)
+        logger.info("Password reset requested for user: %s", user.id)
+
+    async def reset_password(self, db: AsyncSession, token: str, new_password: str) -> None:
+        """Validate reset token, update password, delete token. Raises ValueError if invalid."""
+        r = _get_redis()
+        user_id = await r.get(f"pwd_reset:{token}")
+        if not user_id:
+            raise ValueError("Invalid or expired password reset token.")
+
+        result = await db.execute(select(User).where(User.id == user_id))
+        user: Optional[User] = result.scalar_one_or_none()
+        if user is None or not user.is_active:
+            raise ValueError("Invalid or expired password reset token.")
+
+        user.password_hash = hash_password(new_password)
+        await r.delete(f"pwd_reset:{token}")
+        await db.commit()
+        logger.info("Password reset completed for user: %s", user.id)
 
     # ------------------------------------------------------------------
     # Internal helpers

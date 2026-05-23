@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -21,6 +22,16 @@ from app.utils.rate_limit import login_rate_limiter, register_rate_limiter
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -195,5 +206,46 @@ async def logout(
     return {
         "status": "success",
         "message": "Logged out successfully.",
+        "data": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /forgot-password
+# ---------------------------------------------------------------------------
+
+@router.post("/forgot-password", summary="Request a password reset email")
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    await auth_service.forgot_password(db, payload.email)
+    return {
+        "status": "success",
+        "message": "If that email is registered, a reset link has been sent.",
+        "data": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /reset-password
+# ---------------------------------------------------------------------------
+
+@router.post("/reset-password", summary="Reset password using a reset token")
+async def reset_password(
+    payload: ResetPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    rid = _request_id(request)
+    try:
+        await auth_service.reset_password(db, payload.token, payload.new_password)
+    except ValueError as exc:
+        raise _error(str(exc), rid, status.HTTP_400_BAD_REQUEST)
+
+    return {
+        "status": "success",
+        "message": "Password has been reset. You can now log in with your new password.",
         "data": None,
     }

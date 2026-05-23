@@ -110,6 +110,8 @@ class Settings(BaseSettings):
     SENDGRID_ANALYSIS_COMPLETE_TEMPLATE: str = ""
     SENDGRID_COACH_APPROVAL_TEMPLATE: str = ""
     SENDGRID_DISCOUNT_EARNED_TEMPLATE: str = ""
+    SENDGRID_RESET_PASSWORD_TEMPLATE: str = ""
+    FRONTEND_URL: str = "https://ai-golf-swing.vercel.app"
 
     # YouTube
     YOUTUBE_CLIENT_ID: str = ""

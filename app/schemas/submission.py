@@ -6,8 +6,7 @@ from pydantic import BaseModel
 
 
 class SubmissionCreate(BaseModel):
-    """Empty body — submission is created from the authenticated user's token."""
-    pass
+    club_type: Optional[str] = None
 
 
 class SubmissionFileResponse(BaseModel):
@@ -23,6 +22,7 @@ class SubmissionFileResponse(BaseModel):
 class SubmissionResponse(BaseModel):
     id: uuid.UUID
     status: str
+    club_type: Optional[str] = None
     coach_id: Optional[uuid.UUID] = None
     files: List[SubmissionFileResponse] = []
     created_at: datetime

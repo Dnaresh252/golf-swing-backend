@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -51,6 +51,7 @@ class Submission(Base):
         nullable=True,
         index=True,
     )
+    club_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     status: Mapped[SubmissionStatus] = mapped_column(
         Enum(SubmissionStatus, name="submissionstatus"),
         nullable=False,

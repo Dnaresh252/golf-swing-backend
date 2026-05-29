@@ -1,7 +1,7 @@
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -9,6 +9,7 @@ from app.dependencies import get_current_user
 from app.models.submission_file import FileType
 from app.models.user import User
 from app.schemas.submission import (
+    SubmissionCreate,
     SubmissionFileResponse,
     SubmissionListResponse,
     SubmissionResponse,
@@ -36,10 +37,12 @@ def _request_id(request: Request) -> str:
 )
 async def create_submission(
     request: Request,
+    body: SubmissionCreate = Body(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    submission = await submission_service.create_submission(db, current_user.id)
+    club_type = body.club_type if body else None
+    submission = await submission_service.create_submission(db, current_user.id, club_type=club_type)
     logger.info("Submission created: %s by user: %s", submission.id, current_user.id)
     return {
         "status": "success",

@@ -15,6 +15,18 @@ from celery.schedules import crontab
 
 from app.workers.celery_app import celery_app
 
+# Import all ORM models so SQLAlchemy's class registry is fully populated
+# before any task initialises a mapper (prevents "failed to locate a name" errors
+# when new models are added and the worker is not restarted).
+import app.models.avatar          # noqa: F401, E402
+import app.models.coach           # noqa: F401, E402
+import app.models.discount        # noqa: F401, E402
+import app.models.payment         # noqa: F401, E402
+import app.models.social          # noqa: F401, E402
+import app.models.submission      # noqa: F401, E402
+import app.models.submission_file # noqa: F401, E402
+import app.models.user            # noqa: F401, E402
+
 # ---------------------------------------------------------------------------
 # Beat schedule
 # ---------------------------------------------------------------------------

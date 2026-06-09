@@ -14,7 +14,6 @@ import logging
 import os
 import shutil
 import tempfile
-import urllib.request
 import uuid
 from typing import Any, Dict, Optional
 
@@ -174,7 +173,9 @@ def process_avatar_generation(self: Task, submission_id: str) -> Dict[str, Any]:
         for f in submission.files:
             dest = os.path.join(tmp_dir, f"{f.file_type.value}_{f.id}")
             try:
-                urllib.request.urlretrieve(f.file_url, dest)
+                file_bytes = b2_service.download_file_bytes(f.file_url)
+                with open(dest, "wb") as fh:
+                    fh.write(file_bytes)
             except Exception as exc:
                 # Network error — eligible for retry
                 raise self.retry(exc=exc, countdown=60)

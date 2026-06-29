@@ -2,7 +2,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select as _select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,7 +12,7 @@ from app.models.avatar import AvatarStatus
 from app.models.coach import Coach
 from app.models.submission import Submission
 from app.models.user import User
-from app.schemas.avatar import AvatarAngleResponse, AvatarCustomizationRequest, AvatarResponse, SkeletonData
+from app.schemas.avatar import AvatarAngleResponse, AvatarCustomizationRequest, AvatarResponse
 from app.services.avatar_service import avatar_service
 
 logger = logging.getLogger(__name__)
@@ -80,28 +80,21 @@ async def get_skeleton(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    rid = _request_id(request)
     skeleton_json = await avatar_service.get_skeleton_data(
         db, submission_id, current_user.id
     )
 
-    # Hydrate into SkeletonData schema — fall back gracefully if format differs
-    try:
-        skeleton = SkeletonData(
-            submission_id=submission_id,
-            frames=skeleton_json.get("frames", []),
-        )
-        data = skeleton.model_dump()
-    except Exception:
-        # Return raw JSON to Unity if our schema can't parse Specialist 3's format
-        data = skeleton_json
-
     logger.info("Skeleton data retrieved for submission: %s", submission_id)
-    return {
-        "status": "success",
-        "message": "Skeleton data retrieved.",
-        "data": data,
-    }
+    # Return the raw dict from the DB directly — no Pydantic round-trip needed.
+    # Cache-Control: immutable because skeleton data never changes after generation.
+    return JSONResponse(
+        content={
+            "status": "success",
+            "message": "Skeleton data retrieved.",
+            "data": skeleton_json,
+        },
+        headers={"Cache-Control": "max-age=86400, immutable"},
+    )
 
 
 # ---------------------------------------------------------------------------

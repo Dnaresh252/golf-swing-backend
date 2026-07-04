@@ -55,6 +55,7 @@ class AvatarResponse(BaseModel):
     angles: List[AvatarAngleResponse] = []
     skin_tone_value: Optional[int] = None
     body_thickness_value: Optional[int] = None
+    recommended_avatar_id: Optional[str] = None
     attire_selection: Optional[str] = None
     shoe_color_value: Optional[float] = None
     headgear_enabled: bool = True

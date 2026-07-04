@@ -52,6 +52,7 @@ class Submission(Base):
         index=True,
     )
     club_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    avatar_choice: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     status: Mapped[SubmissionStatus] = mapped_column(
         Enum(SubmissionStatus, name="submissionstatus"),
         nullable=False,

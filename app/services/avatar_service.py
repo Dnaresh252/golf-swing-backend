@@ -14,6 +14,33 @@ logger = logging.getLogger(__name__)
 
 _VALID_ANGLES = {"top", "front", "left", "right", "back"}
 
+_AVATAR_PROFILES = {
+    "avatar_1":  {"tone": 54, "build": 40},
+    "avatar_2":  {"tone": 26, "build": 40},
+    "avatar_3":  {"tone": 46, "build": 40},
+    "avatar_4":  {"tone": 21, "build": 40},
+    "avatar_5":  {"tone": 26, "build": 40},
+    "avatar_6":  {"tone": 31, "build": 40},
+    "avatar_7":  {"tone": 59, "build": 40},
+    "avatar_8":  {"tone": 63, "build": 40},
+    "avatar_9":  {"tone": 52, "build": 40},
+    "avatar_10": {"tone": 31, "build": 40},
+}
+
+
+def _compute_recommended_avatar(
+    skin_tone: Optional[int], body_thickness: Optional[int]
+) -> str:
+    if skin_tone is None or body_thickness is None:
+        return "avatar_1"
+    best, best_score = "avatar_1", float("inf")
+    for avatar_id, profile in _AVATAR_PROFILES.items():
+        score = abs(skin_tone - profile["tone"]) * 1.2 + abs(body_thickness - profile["build"])
+        if score < best_score:
+            best, best_score = avatar_id, score
+    return best
+
+
 # Maps angle name → Avatar column name
 _ANGLE_URL_COLUMNS = {
     "top":   "view_top_url",
@@ -207,6 +234,9 @@ class AvatarService:
             angles=angles,
             skin_tone_value=avatar.skin_tone_value,
             body_thickness_value=avatar.body_thickness_value,
+            recommended_avatar_id=_compute_recommended_avatar(
+                avatar.skin_tone_value, avatar.body_thickness_value
+            ),
             attire_selection=avatar.attire_selection,
             shoe_color_value=avatar.shoe_color_value,
             headgear_enabled=avatar.headgear_enabled,

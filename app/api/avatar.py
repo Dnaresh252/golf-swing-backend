@@ -80,9 +80,39 @@ async def get_skeleton(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    skeleton_json = await avatar_service.get_skeleton_data(
-        db, submission_id, current_user.id
-    )
+    # 404 immediately if submission doesn't exist or belongs to a different user.
+    await avatar_service._get_owned_submission_id(db, submission_id, current_user.id)
+
+    avatar = await avatar_service._get_avatar_for_submission(db, submission_id)
+
+    # No avatar record yet — analysis hasn't started.
+    if avatar is None:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "status": "processing",
+                "message": "Skeleton data not yet available. Analysis has not started.",
+                "data": None,
+            },
+        )
+
+    # Generation failed — client should resubmit, not retry.
+    if avatar.status == AvatarStatus.FAILED:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Avatar generation failed. Please resubmit for analysis.",
+        )
+
+    # Still processing (PENDING or PROCESSING) or complete but skeleton missing.
+    if avatar.status != AvatarStatus.COMPLETED or avatar.skeleton_json is None:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "status": "processing",
+                "message": "Skeleton data is being generated. Please check back shortly.",
+                "data": None,
+            },
+        )
 
     logger.info("Skeleton data retrieved for submission: %s", submission_id)
     # Return the raw dict from the DB directly — no Pydantic round-trip needed.
@@ -91,7 +121,7 @@ async def get_skeleton(
         content={
             "status": "success",
             "message": "Skeleton data retrieved.",
-            "data": skeleton_json,
+            "data": avatar.skeleton_json,
         },
         headers={"Cache-Control": "max-age=86400, immutable"},
     )

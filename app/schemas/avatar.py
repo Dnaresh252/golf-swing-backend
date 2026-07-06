@@ -20,6 +20,9 @@ class JointData(BaseModel):
     y: float
     z: float
     confidence: float
+    wx: Optional[float] = None
+    wy: Optional[float] = None
+    wz: Optional[float] = None
 
 
 class FrameData(BaseModel):

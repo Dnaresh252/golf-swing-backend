@@ -44,11 +44,14 @@ async def get_avatar(
     avatar = await avatar_service.get_avatar(db, submission_id, current_user.id)
 
     if avatar.status == AvatarStatus.PROCESSING:
-        return {
-            "status": "success",
-            "message": "Avatar is being generated, please check back.",
-            "data": avatar_service.build_avatar_response(avatar).model_dump(),
-        }, status.HTTP_202_ACCEPTED
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "status": "processing",
+                "message": "Avatar is being generated, please check back.",
+                "data": avatar_service.build_avatar_response(avatar).model_dump(mode="json"),
+            },
+        )
 
     if avatar.status == AvatarStatus.FAILED:
         logger.info("Avatar FAILED retrieved for submission: %s", submission_id)

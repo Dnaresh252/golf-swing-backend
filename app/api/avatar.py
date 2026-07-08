@@ -131,6 +131,48 @@ async def get_skeleton(
 
 
 # ---------------------------------------------------------------------------
+# GET /submissions/{id}/avatar/skeleton/raw  (Unity direct consumption)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{submission_id}/avatar/skeleton/raw",
+    summary="Get skeleton JSON without envelope wrapper (Unity direct consumption)",
+)
+async def get_skeleton_raw(
+    submission_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    await avatar_service._get_owned_submission_id(db, submission_id, current_user.id)
+    avatar = await avatar_service._get_avatar_for_submission(db, submission_id)
+
+    if avatar is None:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={"status": "processing", "message": "Skeleton data not yet available. Analysis has not started."},
+        )
+
+    if avatar.status == AvatarStatus.FAILED:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Avatar generation failed. Please resubmit for analysis.",
+        )
+
+    if avatar.status != AvatarStatus.COMPLETED or avatar.skeleton_json is None:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={"status": "processing", "message": "Skeleton data is being generated. Please check back shortly."},
+        )
+
+    logger.info("Raw skeleton data retrieved for submission: %s", submission_id)
+    return JSONResponse(
+        content=avatar.skeleton_json,
+        headers={"Cache-Control": "max-age=86400, immutable"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # GET /submissions/{id}/avatar/angles/{angle}
 # ---------------------------------------------------------------------------
 

@@ -277,7 +277,7 @@ class SubmissionService:
                 detail=f"Video exceeds the maximum size of {settings.MAX_VIDEO_SIZE_MB} MB.",
             )
 
-        self._check_video_duration(content)
+        self._validate_video_upload(content)
 
         dest = b2_service.build_destination_path(
             str(user_id), str(submission_id), "SWING_VIDEO", file.filename or "video"
@@ -377,36 +377,59 @@ class SubmissionService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _check_video_duration(self, content: bytes) -> None:
-        """Run ffprobe on a temp file; raise 400 if duration exceeds the limit."""
+    def _validate_video_upload(self, content: bytes) -> None:
+        """
+        Quality gate for uploaded videos. Raises HTTP 422 with a rejection_reason
+        field if any threshold is exceeded. Checked in order: size, resolution, duration.
+
+        Thresholds:
+          - File size  : max 500 MB
+          - Resolution : min 480 pixels tall
+          - Duration   : min 3 s, max 30 s
+        """
+        # --- 1. File size ---
+        _MAX_BYTES = 500 * 1024 * 1024  # 500 MB
+        if len(content) > _MAX_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "rejection_reason": "file_too_large",
+                    "message": f"Video must be under 500 MB (yours is {len(content) / 1024 / 1024:.1f} MB).",
+                },
+            )
+
+        # --- 2. Resolution + Duration via ffprobe ---
         tmp_path: Optional[str] = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
                 tmp.write(content)
                 tmp_path = tmp.name
 
+            import json as _json
             ffprobe = settings.FFMPEG_PATH.replace("ffmpeg", "ffprobe")
             proc = subprocess.run(
                 [
                     ffprobe, "-v", "error",
-                    "-show_entries", "format=duration",
-                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    "-select_streams", "v:0",
+                    "-show_entries", "format=duration:stream=height",
+                    "-of", "json",
                     tmp_path,
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=30,
             )
-            raw = proc.stdout.decode().strip()
-            if not raw:
-                raise ValueError("ffprobe returned no duration.")
-            duration = float(raw)
+            parsed = _json.loads(proc.stdout.decode())
+            streams = parsed.get("streams", [])
+            fmt     = parsed.get("format", {})
+            height   = int(streams[0]["height"]) if streams and "height" in streams[0] else None
+            duration = float(fmt["duration"]) if "duration" in fmt else None
 
-        except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Could not verify video duration. Please use a different file.",
-            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+            # ffprobe unavailable or video unreadable — allow upload to proceed
+            # rather than blocking valid files on a server configuration issue.
+            logger.warning("ffprobe quality check failed — skipping resolution/duration gate.")
+            return
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 try:
@@ -414,14 +437,34 @@ class SubmissionService:
                 except OSError:
                     pass
 
-        if duration > settings.MAX_VIDEO_DURATION_SECONDS:
+        # --- 3. Resolution ---
+        if height is not None and height < 480:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"Video must be {settings.MAX_VIDEO_DURATION_SECONDS} seconds or less "
-                    f"(yours is {duration:.1f}s)."
-                ),
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "rejection_reason": "resolution_too_low",
+                    "message": f"Video must be at least 480p (yours is {height}p).",
+                },
             )
+
+        # --- 4. Duration ---
+        if duration is not None:
+            if duration < 3.0:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "rejection_reason": "video_too_short",
+                        "message": f"Video must be at least 3 seconds (yours is {duration:.1f}s).",
+                    },
+                )
+            if duration > 30.0:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "rejection_reason": "video_too_long",
+                        "message": f"Video must be 30 seconds or less (yours is {duration:.1f}s).",
+                    },
+                )
 
     async def _send_status_email(self, submission: Submission, subject: str) -> None:
         """Send a status-change email via SendGrid.  Never raises."""

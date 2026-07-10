@@ -46,3 +46,13 @@ class SubmissionStatusResponse(BaseModel):
     status: str
     message: str
     updated_at: datetime
+
+
+class SubmissionStatusDetailResponse(BaseModel):
+    """Detailed status response consumed by the Unity app and frontend polling."""
+    submission_id: uuid.UUID
+    status: str          # pending | uploading | queued | processing | ready | failed
+    avatar_status: str   # none | generating | ready | failed
+    created_at: datetime
+    updated_at: datetime
+    error_message: Optional[str] = None

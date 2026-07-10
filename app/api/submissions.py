@@ -2,10 +2,14 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.models.avatar import AvatarStatus
+from app.models.submission import Submission, SubmissionStatus
 from app.models.submission_file import FileType
 from app.models.user import User
 from app.schemas.submission import (
@@ -13,6 +17,7 @@ from app.schemas.submission import (
     SubmissionFileResponse,
     SubmissionListResponse,
     SubmissionResponse,
+    SubmissionStatusDetailResponse,
     SubmissionStatusResponse,
 )
 from app.services.submission_service import submission_service
@@ -222,9 +227,21 @@ async def get_submission(
 # GET /submissions/{id}/status
 # ---------------------------------------------------------------------------
 
+_SUBMISSION_STATUS_MAP = {
+    SubmissionStatus.PENDING:          "pending",
+    SubmissionStatus.UPLOADING:        "uploading",
+    SubmissionStatus.ANALYZING:        "processing",
+    SubmissionStatus.READY_FOR_REVIEW: "queued",
+    SubmissionStatus.IN_REVIEW:        "processing",
+    SubmissionStatus.CORRECTIONS_MADE: "ready",
+    SubmissionStatus.COMPLETED:        "ready",
+    SubmissionStatus.REJECTED:         "failed",
+}
+
+
 @router.get(
     "/{submission_id}/status",
-    summary="Poll submission status — use this for frontend progress tracking",
+    summary="Poll submission + avatar status — use this for frontend and Unity progress tracking",
 )
 async def get_submission_status(
     submission_id: uuid.UUID,
@@ -232,21 +249,41 @@ async def get_submission_status(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    submission = await submission_service.get_submission(
-        db=db,
-        submission_id=submission_id,
-        user_id=current_user.id,
+    stmt = (
+        select(Submission)
+        .where(Submission.id == submission_id)
+        .options(selectinload(Submission.avatar))
     )
-    message = submission_service.get_status_message(submission.status)
+    result = await db.execute(stmt)
+    submission: Submission = result.scalar_one_or_none()
+
+    if submission is None or submission.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
+
+    mapped_status = _SUBMISSION_STATUS_MAP.get(submission.status, submission.status.value.lower())
+
+    avatar = submission.avatar
+    if avatar is None or avatar.status == AvatarStatus.PENDING:
+        avatar_status = "none"
+    elif avatar.status == AvatarStatus.PROCESSING:
+        avatar_status = "generating"
+    elif avatar.status == AvatarStatus.COMPLETED:
+        avatar_status = "ready"
+    else:
+        avatar_status = "failed"
+
+    error_message = (avatar.error_message if avatar and avatar.status == AvatarStatus.FAILED else None)
 
     return {
         "status": "success",
-        "message": message,
-        "data": SubmissionStatusResponse(
+        "message": submission_service.get_status_message(submission.status),
+        "data": SubmissionStatusDetailResponse(
             submission_id=submission.id,
-            status=submission.status.value,
-            message=message,
+            status=mapped_status,
+            avatar_status=avatar_status,
+            created_at=submission.created_at,
             updated_at=submission.updated_at,
+            error_message=error_message,
         ).model_dump(),
     }
 

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -125,6 +126,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# GZip: compress any response >= 1000 bytes for clients that send Accept-Encoding: gzip
+# Must be added after CORS so it wraps the outermost layer and compresses final responses.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 # ---------------------------------------------------------------------------
 # Request ID middleware
 # ---------------------------------------------------------------------------
@@ -173,14 +178,13 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         _request_id(request),
         exc.detail,
     )
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "status": "error",
-            "message": exc.detail,
-            "request_id": _request_id(request),
-        },
-    )
+    # When detail is a dict (e.g. video quality gate), spread it directly into the
+    # response so structured fields like `rejection_reason` surface at the top level.
+    if isinstance(exc.detail, dict):
+        content = {"status": "error", "request_id": _request_id(request), **exc.detail}
+    else:
+        content = {"status": "error", "message": exc.detail, "request_id": _request_id(request)}
+    return JSONResponse(status_code=exc.status_code, content=content)
 
 
 @app.exception_handler(RequestValidationError)

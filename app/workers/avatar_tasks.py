@@ -82,21 +82,29 @@ def _fail_avatar(
     error_message: str,
 ) -> None:
     from app.config import settings
+    from app.models.user import User
+    from sqlalchemy.orm import joinedload
 
     try:
-        avatar = db.execute(
-            select(Avatar).where(Avatar.submission_id == uuid.UUID(submission_id))
-        ).scalar_one_or_none()
+        sub_uuid = uuid.UUID(submission_id)
 
+        avatar = db.execute(
+            select(Avatar).where(Avatar.submission_id == sub_uuid)
+        ).scalar_one_or_none()
         if avatar:
             avatar.status = AvatarStatus.FAILED
             avatar.error_message = error_message
-            db.commit()
 
-        # Notify user
         sub = db.execute(
-            select(Submission).where(Submission.id == uuid.UUID(submission_id))
-        ).scalar_one_or_none()
+            select(Submission)
+            .where(Submission.id == sub_uuid)
+            .options(joinedload(Submission.user))
+        ).unique().scalar_one_or_none()
+        if sub:
+            sub.status = SubmissionStatus.REJECTED
+
+        db.commit()
+
         if sub and sub.user:
             _send_email_sync(
                 sub.user.email,
@@ -318,3 +326,53 @@ def process_avatar_generation(self: Task, submission_id: str) -> Dict[str, Any]:
                 logger.info("[%s] Temp dir cleaned up.", submission_id)
             except Exception as exc:
                 logger.warning("[%s] Failed to clean temp dir: %s", submission_id, exc)
+
+
+# ---------------------------------------------------------------------------
+# Periodic task: detect and fail jobs stuck in PROCESSING for > 10 minutes
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="app.workers.avatar_tasks.detect_stuck_jobs",
+    ignore_result=True,
+)
+def detect_stuck_jobs() -> None:
+    """
+    Sweep for Avatar records stuck in PROCESSING for more than 10 minutes.
+    These represent Celery tasks that died without updating the DB.
+    Marks them FAILED and the parent Submission REJECTED, then sends the
+    failure email so the golfer knows to re-submit.
+
+    Scheduled every 5 minutes via Celery Beat (configured in celery_app.py).
+    """
+    from datetime import datetime, timezone, timedelta
+
+    threshold = datetime.now(timezone.utc) - timedelta(minutes=10)
+    db = _sync_session()
+    try:
+        stuck = db.execute(
+            select(Avatar).where(
+                Avatar.status == AvatarStatus.PROCESSING,
+                Avatar.updated_at < threshold,
+            )
+        ).scalars().all()
+
+        if not stuck:
+            logger.debug("[detect_stuck_jobs] No stuck jobs found.")
+            return
+
+        for avatar in stuck:
+            submission_id = str(avatar.submission_id)
+            logger.warning(
+                "[detect_stuck_jobs] Avatar %s (submission %s) stuck in PROCESSING "
+                "since %s — marking FAILED.",
+                avatar.id, submission_id, avatar.updated_at.isoformat(),
+            )
+            _fail_avatar(db, submission_id, "Processing timed out after 10 minutes.")
+
+        logger.info("[detect_stuck_jobs] Resolved %d stuck job(s).", len(stuck))
+
+    except Exception as exc:
+        logger.error("[detect_stuck_jobs] Sweep error: %s", exc)
+    finally:
+        db.close()

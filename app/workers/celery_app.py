@@ -26,4 +26,10 @@ celery_app.conf.update(
     task_time_limit=settings.CELERY_TASK_TIMEOUT,
     task_max_retries=settings.CELERY_MAX_RETRIES,
     worker_concurrency=settings.CELERY_WORKER_CONCURRENCY,
+    beat_schedule={
+        "detect-stuck-jobs-every-5-minutes": {
+            "task": "app.workers.avatar_tasks.detect_stuck_jobs",
+            "schedule": 300,  # seconds
+        },
+    },
 )

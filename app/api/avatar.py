@@ -173,6 +173,73 @@ async def get_skeleton_raw(
 
 
 # ---------------------------------------------------------------------------
+# GET /submissions/{id}/avatar/skeleton/slim  (Unity optimised — world coords only)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{submission_id}/avatar/skeleton/slim",
+    summary="Get slim skeleton JSON — world coords only, no overlay fields (110 KB vs 2346 KB)",
+)
+async def get_skeleton_slim(
+    submission_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    await avatar_service._get_owned_submission_id(db, submission_id, current_user.id)
+    avatar = await avatar_service._get_avatar_for_submission(db, submission_id)
+
+    if avatar is None:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={"status": "processing", "message": "Skeleton data not yet available. Analysis has not started."},
+        )
+
+    if avatar.status == AvatarStatus.FAILED:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Avatar generation failed. Please resubmit for analysis.",
+        )
+
+    if avatar.status != AvatarStatus.COMPLETED or avatar.skeleton_json is None:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={"status": "processing", "message": "Skeleton data is being generated. Please check back shortly."},
+        )
+
+    skel = avatar.skeleton_json
+    slim_frames = []
+    for fr in skel.get("frames", []):
+        slim_frames.append({
+            "frame_num": fr.get("frame_num"),
+            "timestamp": fr.get("timestamp"),
+            "joints": [
+                {
+                    "id": j.get("id"),
+                    "name": j.get("name"),
+                    "wx": round(j.get("wx") or 0.0, 4),
+                    "wy": round(j.get("wy") or 0.0, 4),
+                    "wz": round(j.get("wz") or 0.0, 4),
+                    "confidence": round(j.get("confidence") or 0.0, 2),
+                }
+                for j in fr.get("joints", [])
+            ],
+        })
+
+    slim = {
+        "submission_id": skel.get("submission_id"),
+        "meta": skel.get("meta"),
+        "frames": slim_frames,
+    }
+
+    logger.info("Slim skeleton data retrieved for submission: %s", submission_id)
+    return JSONResponse(
+        content=slim,
+        headers={"Cache-Control": "max-age=86400, immutable"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # GET /submissions/{id}/avatar/angles/{angle}
 # ---------------------------------------------------------------------------
 

@@ -26,6 +26,40 @@ def _request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "unknown")
 
 
+def _clean_joint(j: dict) -> dict:
+    """Validate joint: fix nulls, clamp confidence, ensure int id. Strips video_view and extras."""
+    out = {
+        "id": int(j["id"]) if j.get("id") is not None else 0,
+        "name": j.get("name") or "",
+        "x": float(j.get("x") or 0.0),
+        "y": float(j.get("y") or 0.0),
+        "z": float(j.get("z") or 0.0),
+        "confidence": max(0.0, min(1.0, float(j.get("confidence") or 0.0))),
+    }
+    wx, wy, wz = j.get("wx"), j.get("wy"), j.get("wz")
+    if wx is not None and wy is not None and wz is not None:
+        out["wx"] = float(wx)
+        out["wy"] = float(wy)
+        out["wz"] = float(wz)
+    return out
+
+
+def _clean_skeleton(skel: dict) -> dict:
+    """Strip video_view and extra fields; validate all joint values."""
+    frames = []
+    for fr in skel.get("frames", []):
+        frames.append({
+            "frame_num": fr.get("frame_num"),
+            "timestamp": fr.get("timestamp"),
+            "joints": [_clean_joint(j) for j in fr.get("joints", [])],
+        })
+    return {
+        "submission_id": skel.get("submission_id"),
+        "frames": frames,
+        "meta": skel.get("meta"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # GET /submissions/{id}/avatar
 # ---------------------------------------------------------------------------
@@ -118,13 +152,11 @@ async def get_skeleton(
         )
 
     logger.info("Skeleton data retrieved for submission: %s", submission_id)
-    # Return the raw dict from the DB directly — no Pydantic round-trip needed.
-    # Cache-Control: immutable because skeleton data never changes after generation.
     return JSONResponse(
         content={
             "status": "success",
             "message": "Skeleton data retrieved.",
-            "data": avatar.skeleton_json,
+            "data": _clean_skeleton(avatar.skeleton_json),
         },
         headers={"Cache-Control": "max-age=86400, immutable"},
     )
@@ -167,7 +199,67 @@ async def get_skeleton_raw(
 
     logger.info("Raw skeleton data retrieved for submission: %s", submission_id)
     return JSONResponse(
-        content=avatar.skeleton_json,
+        content=_clean_skeleton(avatar.skeleton_json),
+        headers={"Cache-Control": "max-age=86400, immutable"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /submissions/{id}/avatar/skeleton/raw/slim  (Unity fallback — world coords only)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{submission_id}/avatar/skeleton/raw/slim",
+    summary="Get raw slim skeleton — world coords only, no ids/screen coords, no wrapper",
+)
+async def get_skeleton_raw_slim(
+    submission_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    await avatar_service._get_owned_submission_id(db, submission_id, current_user.id)
+    avatar = await avatar_service._get_avatar_for_submission(db, submission_id)
+
+    if avatar is None:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={"status": "processing", "message": "Skeleton data not yet available. Analysis has not started."},
+        )
+
+    if avatar.status == AvatarStatus.FAILED:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Avatar generation failed. Please resubmit for analysis.",
+        )
+
+    if avatar.status != AvatarStatus.COMPLETED or avatar.skeleton_json is None:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={"status": "processing", "message": "Skeleton data is being generated. Please check back shortly."},
+        )
+
+    clean = _clean_skeleton(avatar.skeleton_json)
+    slim_frames = []
+    for fr in clean["frames"]:
+        slim_frames.append({
+            "frame_num": fr["frame_num"],
+            "timestamp": fr["timestamp"],
+            "joints": [
+                {
+                    "name": j["name"],
+                    "wx": round(j.get("wx") or 0.0, 4),
+                    "wy": round(j.get("wy") or 0.0, 4),
+                    "wz": round(j.get("wz") or 0.0, 4),
+                    "confidence": round(j["confidence"], 2),
+                }
+                for j in fr["joints"]
+            ],
+        })
+
+    logger.info("Raw slim skeleton data retrieved for submission: %s", submission_id)
+    return JSONResponse(
+        content={"frames": slim_frames, "meta": clean["meta"]},
         headers={"Cache-Control": "max-age=86400, immutable"},
     )
 
@@ -207,34 +299,28 @@ async def get_skeleton_slim(
             content={"status": "processing", "message": "Skeleton data is being generated. Please check back shortly."},
         )
 
-    skel = avatar.skeleton_json
+    clean = _clean_skeleton(avatar.skeleton_json)
     slim_frames = []
-    for fr in skel.get("frames", []):
+    for fr in clean["frames"]:
         slim_frames.append({
-            "frame_num": fr.get("frame_num"),
-            "timestamp": fr.get("timestamp"),
+            "frame_num": fr["frame_num"],
+            "timestamp": fr["timestamp"],
             "joints": [
                 {
-                    "id": j.get("id"),
-                    "name": j.get("name"),
+                    "id": j["id"],
+                    "name": j["name"],
                     "wx": round(j.get("wx") or 0.0, 4),
                     "wy": round(j.get("wy") or 0.0, 4),
                     "wz": round(j.get("wz") or 0.0, 4),
-                    "confidence": round(j.get("confidence") or 0.0, 2),
+                    "confidence": round(j["confidence"], 2),
                 }
-                for j in fr.get("joints", [])
+                for j in fr["joints"]
             ],
         })
 
-    slim = {
-        "submission_id": skel.get("submission_id"),
-        "meta": skel.get("meta"),
-        "frames": slim_frames,
-    }
-
     logger.info("Slim skeleton data retrieved for submission: %s", submission_id)
     return JSONResponse(
-        content=slim,
+        content={"submission_id": clean["submission_id"], "meta": clean["meta"], "frames": slim_frames},
         headers={"Cache-Control": "max-age=86400, immutable"},
     )
 

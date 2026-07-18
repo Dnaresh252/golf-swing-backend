@@ -56,3 +56,13 @@ class SubmissionStatusDetailResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     error_message: Optional[str] = None
+
+
+class AvatarChoiceRequest(BaseModel):
+    avatar_choice: str
+
+
+class AvatarChoiceResponse(BaseModel):
+    submission_id: uuid.UUID
+    avatar_choice: str
+    updated_at: datetime

@@ -13,6 +13,8 @@ from app.models.submission import Submission, SubmissionStatus
 from app.models.submission_file import FileType
 from app.models.user import User
 from app.schemas.submission import (
+    AvatarChoiceRequest,
+    AvatarChoiceResponse,
     SubmissionCreate,
     SubmissionFileResponse,
     SubmissionListResponse,
@@ -284,6 +286,60 @@ async def get_submission_status(
             created_at=submission.created_at,
             updated_at=submission.updated_at,
             error_message=error_message,
+        ).model_dump(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /submissions/{id}/select-avatar
+# ---------------------------------------------------------------------------
+
+_VALID_AVATAR_CHOICES = {
+    "1st", "2nd", "3rd", "4th", "5th",
+    "6th", "7th", "8th", "9th", "10th",
+}
+
+
+@router.post(
+    "/{submission_id}/select-avatar",
+    summary="Save the golfer's avatar selection (1st–10th)",
+)
+async def select_avatar(
+    submission_id: uuid.UUID,
+    body: AvatarChoiceRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if body.avatar_choice not in _VALID_AVATAR_CHOICES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid avatar_choice '{body.avatar_choice}'. Must be one of: {', '.join(sorted(_VALID_AVATAR_CHOICES))}.",
+        )
+
+    result = await db.execute(
+        select(Submission).where(Submission.id == submission_id)
+    )
+    submission: Submission = result.scalar_one_or_none()
+
+    if submission is None or submission.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
+
+    submission.avatar_choice = body.avatar_choice
+    await db.commit()
+    await db.refresh(submission)
+
+    logger.info(
+        "Avatar choice '%s' saved for submission: %s by user: %s",
+        body.avatar_choice, submission_id, current_user.id,
+    )
+    return {
+        "status": "success",
+        "message": f"Avatar '{body.avatar_choice}' selected.",
+        "data": AvatarChoiceResponse(
+            submission_id=submission.id,
+            avatar_choice=submission.avatar_choice,
+            updated_at=submission.updated_at,
         ).model_dump(),
     }
 

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 
 class CoachQueueItem(BaseModel):
@@ -75,3 +75,33 @@ class CorrectedVideoUpload(BaseModel):
                 f"Invalid angle '{v}'. Must be one of: top, front, left, right, back."
             )
         return v.lower().strip()
+
+
+# ---------------------------------------------------------------------------
+# Unity coach tool corrections schemas
+# ---------------------------------------------------------------------------
+
+class CorrectedJoint(BaseModel):
+    id: int
+    wx: float
+    wy: float
+    wz: float
+
+
+class CorrectedFrame(BaseModel):
+    frame_num: int
+    joints: List[CorrectedJoint]
+
+
+class UnityCorrectionsRequest(BaseModel):
+    submission_id: Optional[str] = None
+    coach_notes: Optional[str] = None
+    created_at: Optional[str] = None
+    corrected_frames: List[CorrectedFrame]
+
+    @field_validator("corrected_frames", mode="before")
+    @classmethod
+    def frames_not_empty(cls, v: list) -> list:
+        if not v:
+            raise ValueError("corrected_frames must contain at least one frame.")
+        return v

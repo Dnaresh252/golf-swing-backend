@@ -62,7 +62,15 @@ async def get_corrections(
     )
     corrected_videos = cv_result.scalars().all()
 
-    if not corrected_videos:
+    # Load coach notes (contains Unity corrections too)
+    notes_result = await db.execute(
+        select(CoachNotes).where(CoachNotes.submission_id == submission_id)
+    )
+    notes = notes_result.scalar_one_or_none()
+
+    # 404 only if neither corrected videos nor Unity corrections exist
+    unity_corrections = notes.corrected_skeleton_json if notes else None
+    if not corrected_videos and not unity_corrections:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -71,12 +79,6 @@ async def get_corrections(
                 "request_id": rid,
             },
         )
-
-    # Load coach notes
-    notes_result = await db.execute(
-        select(CoachNotes).where(CoachNotes.submission_id == submission_id)
-    )
-    notes = notes_result.scalar_one_or_none()
 
     # Build angles dict — key is lowercase angle name
     angles: dict = {}
@@ -103,6 +105,7 @@ async def get_corrections(
             "angles": angles,
             "coach_notes": coach_notes_data,
             "total_angles": len(angles),
+            "unity_corrections": unity_corrections,
         },
     }
 

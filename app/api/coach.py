@@ -10,6 +10,8 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.coach import Coach
 from app.models.user import User
+from app.models.coach_notes import CoachNotes
+from app.models.submission import Submission, SubmissionStatus
 from app.schemas.coach import (
     CoachActionRequest,
     CoachNotesResponse,
@@ -17,6 +19,7 @@ from app.schemas.coach import (
     CoachQueueItem,
     CoachQueueResponse,
     CorrectedVideoUpload,
+    UnityCorrectionsRequest,
 )
 from app.services.coach_service import coach_service
 
@@ -268,6 +271,76 @@ async def reject_submission(
         "status": "success",
         "message": "Submission rejected. User has been notified.",
         "data": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /coach/queue/{submission_id}/corrections  (Unity coach tool)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/queue/{submission_id}/corrections",
+    summary="Receive corrected skeleton frames from the Unity coach tool",
+)
+async def save_unity_corrections(
+    submission_id: uuid.UUID,
+    payload: UnityCorrectionsRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    auth: tuple = Depends(get_current_coach),
+):
+    _, coach = auth
+
+    # Verify submission exists
+    sub_result = await db.execute(select(Submission).where(Submission.id == submission_id))
+    submission = sub_result.scalar_one_or_none()
+    if submission is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
+
+    # Build the corrections blob to store
+    corrections_data = {
+        "corrected_frames": [f.model_dump() for f in payload.corrected_frames],
+        "coach_notes": payload.coach_notes,
+        "submitted_at": payload.created_at,
+        "frame_count": len(payload.corrected_frames),
+    }
+
+    # Upsert into coach_notes (unique per submission_id)
+    notes_result = await db.execute(
+        select(CoachNotes).where(CoachNotes.submission_id == submission_id)
+    )
+    notes = notes_result.scalar_one_or_none()
+
+    if notes is None:
+        notes = CoachNotes(
+            submission_id=submission_id,
+            coach_id=coach.id,
+            notes_text=payload.coach_notes,
+            corrected_skeleton_json=corrections_data,
+        )
+        db.add(notes)
+    else:
+        notes.corrected_skeleton_json = corrections_data
+        if payload.coach_notes:
+            notes.notes_text = payload.coach_notes
+
+    # Advance submission status to CORRECTIONS_MADE if it was IN_REVIEW
+    if submission.status in (SubmissionStatus.IN_REVIEW, SubmissionStatus.READY_FOR_REVIEW):
+        submission.status = SubmissionStatus.CORRECTIONS_MADE
+
+    await db.commit()
+
+    logger.info(
+        "Unity corrections saved for submission %s by coach %s — %d frame(s)",
+        submission_id, coach.id, len(payload.corrected_frames),
+    )
+    return {
+        "status": "success",
+        "message": "Corrections saved.",
+        "data": {
+            "submission_id": str(submission_id),
+            "frames_saved": len(payload.corrected_frames),
+        },
     }
 
 

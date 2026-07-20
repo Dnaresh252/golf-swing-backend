@@ -75,13 +75,16 @@ async def register(
     import asyncio
     asyncio.create_task(auth_service.send_welcome_email(user))
 
+    data = AuthResponse(
+        tokens=TokenResponse(**tokens),
+        user=UserResponse.model_validate(user),
+    ).model_dump()
+    data["access_token"] = tokens["access_token"]
+
     return {
         "status": "success",
         "message": "Registration successful. Please verify your email.",
-        "data": AuthResponse(
-            tokens=TokenResponse(**tokens),
-            user=UserResponse.model_validate(user),
-        ).model_dump(),
+        "data": data,
     }
 
 
@@ -107,13 +110,16 @@ async def login(
     tokens = auth_service.create_tokens(user.id)
     logger.info("User logged in: %s", user.email)
 
+    data = AuthResponse(
+        tokens=TokenResponse(**tokens),
+        user=UserResponse.model_validate(user),
+    ).model_dump()
+    data["access_token"] = tokens["access_token"]
+
     return {
         "status": "success",
         "message": "Logged in successfully.",
-        "data": AuthResponse(
-            tokens=TokenResponse(**tokens),
-            user=UserResponse.model_validate(user),
-        ).model_dump(),
+        "data": data,
     }
 
 
@@ -140,14 +146,17 @@ async def coach_login(
     tokens = auth_service.create_tokens(user.id)
     logger.info("Coach logged in: %s", user.email)
 
+    data = CoachLoginResponse(
+        tokens=TokenResponse(**tokens),
+        user=UserResponse.model_validate(user),
+        coach=CoachProfileResponse.model_validate(coach),
+    ).model_dump()
+    data["access_token"] = tokens["access_token"]
+
     return {
         "status": "success",
         "message": "Coach logged in successfully.",
-        "data": CoachLoginResponse(
-            tokens=TokenResponse(**tokens),
-            user=UserResponse.model_validate(user),
-            coach=CoachProfileResponse.model_validate(coach),
-        ).model_dump(),
+        "data": data,
     }
 
 

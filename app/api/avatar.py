@@ -176,7 +176,19 @@ async def get_skeleton_raw(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    await avatar_service._get_owned_submission_id(db, submission_id, current_user.id)
+    # Owner OR any active coach may fetch raw skeleton
+    sub_result = await db.execute(
+        _select(Submission.user_id).where(Submission.id == submission_id)
+    )
+    sub_row = sub_result.one_or_none()
+    if sub_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
+    if sub_row.user_id != current_user.id:
+        coach_result = await db.execute(
+            _select(Coach).where(Coach.user_id == current_user.id, Coach.is_active == True)
+        )
+        if coach_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
     avatar = await avatar_service._get_avatar_for_submission(db, submission_id)
 
     if avatar is None:
@@ -218,7 +230,19 @@ async def get_skeleton_raw_slim(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    await avatar_service._get_owned_submission_id(db, submission_id, current_user.id)
+    # Owner OR any active coach may fetch slim skeleton
+    sub_result = await db.execute(
+        _select(Submission.user_id).where(Submission.id == submission_id)
+    )
+    sub_row = sub_result.one_or_none()
+    if sub_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
+    if sub_row.user_id != current_user.id:
+        coach_result = await db.execute(
+            _select(Coach).where(Coach.user_id == current_user.id, Coach.is_active == True)
+        )
+        if coach_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
     avatar = await avatar_service._get_avatar_for_submission(db, submission_id)
 
     if avatar is None:

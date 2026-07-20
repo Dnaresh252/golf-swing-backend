@@ -84,6 +84,8 @@ async def register(
     return {
         "status": "success",
         "message": "Registration successful. Please verify your email.",
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens["refresh_token"],
         "data": data,
     }
 
@@ -119,6 +121,8 @@ async def login(
     return {
         "status": "success",
         "message": "Logged in successfully.",
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens["refresh_token"],
         "data": data,
     }
 
@@ -156,6 +160,8 @@ async def coach_login(
     return {
         "status": "success",
         "message": "Coach logged in successfully.",
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens["refresh_token"],
         "data": data,
     }
 
@@ -179,6 +185,7 @@ async def refresh_token(
     return {
         "status": "success",
         "message": "Token refreshed.",
+        "access_token": new_access_token,
         "data": {
             "access_token": new_access_token,
             "token_type": "bearer",

@@ -77,7 +77,8 @@ class UserResponse(BaseModel):
         instance = super().model_validate(obj, *args, **kwargs)
         if getattr(obj, "is_admin", False):
             instance.role = "admin"
-        elif getattr(obj, "coach_profile", None) is not None:
+        elif obj.__dict__.get("coach_profile") is not None:
+            # Only check if already eagerly loaded — avoids async lazy-load MissingGreenlet
             instance.role = "coach"
         else:
             instance.role = "user"

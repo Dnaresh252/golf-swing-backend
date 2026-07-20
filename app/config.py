@@ -133,7 +133,7 @@ class Settings(BaseSettings):
     STRIPE_PUBLISHABLE_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_CURRENCY: str = "usd"
-    SUBMISSION_PRICE_CENTS: int = 2500
+    SUBMISSION_PRICE_CENTS: int = 1999
     COACH_PAYOUT_CENTS: int = 1000
 
     # Celery workers

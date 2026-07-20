@@ -60,6 +60,7 @@ class AuthService:
             email=user_data.email.lower(),
             password_hash=hash_password(user_data.password),
             name=user_data.name.strip(),
+            is_admin=False,
         )
         db.add(user)
         await db.flush()  # get id without full commit

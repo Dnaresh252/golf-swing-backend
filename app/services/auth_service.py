@@ -100,7 +100,14 @@ class AuthService:
         if not user.is_active:
             raise PermissionError(ErrorMessage.ACCOUNT_INACTIVE)
 
+        if getattr(user, "suspended", False):
+            raise PermissionError("Account is suspended. Contact support.")
+
         await reset_failed_attempts(email)
+        from datetime import datetime, timezone
+        user.last_login_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(user)
         logger.info("User authenticated: %s", email)
         return user
 
@@ -221,6 +228,8 @@ class AuthService:
             raise ValueError(ErrorMessage.USER_NOT_FOUND)
         if not user.is_active:
             raise ValueError(ErrorMessage.ACCOUNT_INACTIVE)
+        if getattr(user, "suspended", False):
+            raise ValueError("Account is suspended.")
 
         return user
 

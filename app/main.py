@@ -288,10 +288,25 @@ async def root():
 
 
 # ---------------------------------------------------------------------------
+# Public announcement banner — no auth required
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/announcement", tags=["Announcement"])
+async def get_public_announcement():
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(sa_select(AnnouncementModel).limit(1))
+        ann = result.scalar_one_or_none()
+    if ann is None:
+        return {"status": "success", "data": {"message": "", "active": False}}
+    return {"status": "success", "data": {"message": ann.message, "active": ann.active}}
+
+
+# ---------------------------------------------------------------------------
 # Internal — seed a coach record (protected by SECRET_KEY)
 # ---------------------------------------------------------------------------
 
 from app.database import AsyncSessionLocal  # already imported above  # noqa: F811
+from app.models.announcement import Announcement as AnnouncementModel
 from app.models.avatar import Avatar as AvatarModel, AvatarStatus as AvatarStatusEnum
 from app.models.coach import Coach as CoachModel
 from app.models.submission import Submission as SubmissionModel, SubmissionStatus
@@ -585,4 +600,56 @@ async def internal_update_avatar_fbx_urls(payload: dict, request: Request):
         "avatar_glb_url": avatar.avatar_glb_url,
         "avatar_obj_url": avatar.avatar_obj_url,
         "avatar_status": avatar.status.value,
+    }
+
+
+@app.post("/internal/create-admin", tags=["Internal"], include_in_schema=False)
+async def internal_create_admin(payload: dict, request: Request):
+    """
+    Create the one-time owner admin account.
+    Body: { "email": "...", "password": "..." }
+    Requires X-Admin-Key header.
+    ONLY creates admin if no admin account exists yet.
+    """
+    admin_key = request.headers.get("X-Admin-Key", "")
+    if admin_key != _INTERNAL_KEY:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden.")
+
+    from app.utils.security import hash_password as _hash_pw
+
+    email = payload.get("email", "").lower().strip()
+    password = payload.get("password", "").strip()
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="email and password required.")
+
+    async with AsyncSessionLocal() as db:
+        # Ensure no admin exists yet
+        existing_admin = await db.execute(
+            sa_select(UserModel).where(UserModel.is_admin == True)  # noqa: E712
+        )
+        if existing_admin.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="An admin account already exists.")
+
+        existing_email = await db.execute(sa_select(UserModel).where(UserModel.email == email))
+        if existing_email.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="Email already registered.")
+
+        admin_user = UserModel(
+            email=email,
+            password_hash=_hash_pw(password),
+            name="GGW Owner",
+            is_admin=True,
+            is_active=True,
+            is_verified=True,
+        )
+        db.add(admin_user)
+        await db.commit()
+        await db.refresh(admin_user)
+
+    logger.info("Owner admin account created for %s", email)
+    return {
+        "status": "success",
+        "message": "Admin account created.",
+        "email": email,
+        "user_id": str(admin_user.id),
     }

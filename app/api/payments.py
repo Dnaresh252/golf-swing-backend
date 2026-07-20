@@ -13,8 +13,10 @@ from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.discount import DiscountCode
+from app.models.free_code import FreeCode
 from app.models.payment import Payment, PaymentStatus
 from app.models.social import SocialSharing
+from app.models.submission import Submission, SubmissionStatus
 from app.models.user import User
 from app.services import admin_settings
 from app.utils.helpers import get_current_utc
@@ -44,6 +46,7 @@ def _configure_stripe() -> None:
 class CreateIntentRequest(BaseModel):
     submission_id: Optional[uuid.UUID] = None
     discount_code: Optional[str] = None
+    free_code: Optional[str] = None
     skip_free_option: Optional[bool] = False
 
 
@@ -89,27 +92,50 @@ async def create_payment_intent(
     amount_cents: int = admin_settings.get_submission_price_cents()
     free_reason: Optional[str] = None
 
-    # ── 2. First-submission-free: user has social share + no prior payments ─
-    completed_count_row = await db.execute(
-        select(func.count()).select_from(Payment).where(
-            Payment.user_id == current_user.id,
-            Payment.status == PaymentStatus.COMPLETED,
+    # ── 2. First-submission-free (launch promotion) ─────────────────────────
+    completed_sub_count_row = await db.execute(
+        select(func.count()).select_from(Submission).where(
+            Submission.user_id == current_user.id,
+            Submission.status == SubmissionStatus.COMPLETED,
         )
     )
-    completed_count: int = completed_count_row.scalar() or 0
+    completed_sub_count: int = completed_sub_count_row.scalar() or 0
 
-    social_count_row = await db.execute(
-        select(func.count()).select_from(SocialSharing).where(
-            SocialSharing.user_id == current_user.id
-        )
-    )
-    social_count: int = social_count_row.scalar() or 0
-
-    if completed_count == 0 and social_count > 0 and not body.skip_free_option:
+    if completed_sub_count == 0 and not body.skip_free_option:
         amount_cents = 0
-        free_reason = "social_share_first_submission"
+        free_reason = "first_submission_free"
 
-    # ── 3. Discount code ────────────────────────────────────────────────────
+    # ── 3. Free code redemption ─────────────────────────────────────────────
+    free_code_record: Optional[FreeCode] = None
+    if body.free_code and amount_cents > 0:
+        code_upper = body.free_code.upper().strip()
+        fc_result = await db.execute(
+            select(FreeCode).where(
+                FreeCode.code == code_upper,
+                FreeCode.active == True,  # noqa: E712
+            )
+        )
+        free_code_record = fc_result.scalar_one_or_none()
+        if free_code_record is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"status": "error", "message": "Free code is invalid or inactive.", "request_id": rid},
+            )
+        now_utc = get_current_utc()
+        if free_code_record.expires_at and free_code_record.expires_at.replace(tzinfo=timezone.utc if free_code_record.expires_at.tzinfo is None else free_code_record.expires_at.tzinfo) < now_utc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"status": "error", "message": "Free code has expired.", "request_id": rid},
+            )
+        if free_code_record.uses >= free_code_record.max_uses:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"status": "error", "message": "Free code has reached its usage limit.", "request_id": rid},
+            )
+        amount_cents = 0
+        free_reason = f"free_code:{code_upper}"
+
+    # ── 4. Discount code ────────────────────────────────────────────────────
     discount_record: Optional[DiscountCode] = None
     if body.discount_code and amount_cents > 0:
         code_upper = body.discount_code.upper().strip()
@@ -150,17 +176,18 @@ async def create_payment_intent(
         if amount_cents == 0:
             free_reason = "discount_100pct"
 
-    # ── 4. Shared metadata ──────────────────────────────────────────────────
+    # ── 6. Shared metadata ──────────────────────────────────────────────────
     meta = {
         "user_id": str(current_user.id),
         "submission_id": str(body.submission_id) if body.submission_id else None,
         "discount_code": body.discount_code.upper().strip() if body.discount_code else None,
         "discount_percent": discount_record.discount_percent if discount_record else 0,
+        "free_code": body.free_code.upper().strip() if body.free_code else None,
         "is_free": amount_cents == 0,
         "free_reason": free_reason,
     }
 
-    # ── 5. Free path — no Stripe required ──────────────────────────────────
+    # ── 7. Free path — no Stripe required ──────────────────────────────────
     if amount_cents == 0:
         payment = Payment(
             user_id=current_user.id,
@@ -175,6 +202,9 @@ async def create_payment_intent(
         if discount_record is not None:
             discount_record.used = True
             discount_record.used_at = get_current_utc()
+
+        if free_code_record is not None:
+            free_code_record.uses += 1
 
         await db.commit()
         await db.refresh(payment)
@@ -196,7 +226,7 @@ async def create_payment_intent(
             },
         }
 
-    # ── 6. Paid path — create Stripe PaymentIntent ──────────────────────────
+    # ── 8. Paid path — create Stripe PaymentIntent ──────────────────────────
     _configure_stripe()
     try:
         intent = stripe.PaymentIntent.create(
@@ -404,12 +434,15 @@ async def payment_history(
 async def payment_config(
     current_user: User = Depends(get_current_user),
 ):
+    price_cents = admin_settings.get_submission_price_cents()
     return {
         "status": "success",
         "message": "Payment configuration retrieved.",
         "data": {
             "publishable_key": settings.STRIPE_PUBLISHABLE_KEY,
-            "submission_price_cents": admin_settings.get_submission_price_cents(),
+            "submission_price": round(price_cents / 100, 2),
+            "submission_price_cents": price_cents,
+            "first_submission_free": True,
             "currency": settings.STRIPE_CURRENCY,
             "discount_percentage": settings.DISCOUNT_PERCENTAGE,
         },

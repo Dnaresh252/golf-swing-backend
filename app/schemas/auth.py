@@ -70,6 +70,18 @@ class UserResponse(BaseModel):
     profile_picture_url: Optional[str] = None
     is_verified: bool
     created_at: datetime
+    role: str = "user"
+
+    @classmethod
+    def model_validate(cls, obj, *args, **kwargs):
+        instance = super().model_validate(obj, *args, **kwargs)
+        if getattr(obj, "is_admin", False):
+            instance.role = "admin"
+        elif getattr(obj, "coach_profile", None) is not None:
+            instance.role = "coach"
+        else:
+            instance.role = "user"
+        return instance
 
     model_config = {"from_attributes": True}
 

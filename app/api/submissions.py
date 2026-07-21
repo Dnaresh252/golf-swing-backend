@@ -144,6 +144,64 @@ async def submit_for_analysis(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # ── Server-side payment / free-eligibility enforcement ──────────────
+    # Do not trust that the frontend went through the payment page first.
+    from datetime import timedelta
+    from sqlalchemy import func as _func, select as _select
+    from app.models.payment import Payment, PaymentStatus
+    from app.models.submission import Submission as _Sub, SubmissionStatus as _SS
+    from app.services import app_settings
+    from app.utils.helpers import get_current_utc as _now
+
+    free_mode = await app_settings.get_bool_setting(db, "ALL_SUBMISSIONS_FREE", False)
+    allowed = free_mode
+
+    if not allowed:
+        # A payment already linked to this submission
+        linked_row = await db.execute(
+            _select(Payment).where(
+                Payment.submission_id == submission_id,
+                Payment.user_id == current_user.id,
+                Payment.status == PaymentStatus.COMPLETED,
+            ).limit(1)
+        )
+        allowed = linked_row.scalar_one_or_none() is not None
+
+    if not allowed:
+        # Claim the most recent unlinked completed payment (the payment page
+        # creates the payment before the submission exists)
+        recent_cutoff = _now() - timedelta(hours=48)
+        unclaimed_row = await db.execute(
+            _select(Payment).where(
+                Payment.user_id == current_user.id,
+                Payment.status == PaymentStatus.COMPLETED,
+                Payment.submission_id.is_(None),
+                Payment.created_at >= recent_cutoff,
+            ).order_by(Payment.created_at.desc()).limit(1)
+        )
+        unclaimed = unclaimed_row.scalar_one_or_none()
+        if unclaimed is not None:
+            unclaimed.submission_id = submission_id
+            await db.flush()
+            allowed = True
+
+    if not allowed:
+        # First-submission-free rule, evaluated independently on the server
+        prior_row = await db.execute(
+            _select(_func.count()).select_from(_Sub).where(
+                _Sub.user_id == current_user.id,
+                _Sub.id != submission_id,
+                _Sub.status.notin_([_SS.PENDING, _SS.UPLOADING, _SS.REJECTED]),
+            )
+        )
+        allowed = (prior_row.scalar() or 0) == 0
+
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Payment required before this swing can be analyzed.",
+        )
+
     submission = await submission_service.submit_for_analysis(
         db=db,
         submission_id=submission_id,

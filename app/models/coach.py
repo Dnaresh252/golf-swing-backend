@@ -38,6 +38,29 @@ class Coach(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
+    # Coach tier: "golf_coach" (default) or "pga_pro"
+    credential: Mapped[str] = mapped_column(
+        __import__("sqlalchemy").String(20),
+        nullable=False,
+        default="golf_coach",
+        server_default="golf_coach",
+    )
+    # Payout counters — period_* reset on Mark as Paid; lifetime_* never reset
+    period_reviews: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    period_approvals: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    lifetime_reviews: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    lifetime_approvals: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    lifetime_paid_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

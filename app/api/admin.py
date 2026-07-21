@@ -20,7 +20,7 @@ from app.models.free_code import FreeCode
 from app.models.payment import Payment, PaymentStatus
 from app.models.submission import Submission, SubmissionStatus
 from app.models.user import User
-from app.services import admin_settings
+from app.services import admin_settings, app_settings
 from app.utils.helpers import get_current_utc
 from app.utils.security import hash_password
 
@@ -309,6 +309,15 @@ class CreateCoachRequest(BaseModel):
     full_name: str
     email: str
     password: str
+    credential: str = "golf_coach"
+
+    @field_validator("credential")
+    @classmethod
+    def credential_valid(cls, v: str) -> str:
+        v = (v or "golf_coach").strip().lower()
+        if v not in ("golf_coach", "pga_pro"):
+            raise ValueError("credential must be 'golf_coach' or 'pga_pro'.")
+        return v
 
     @field_validator("full_name")
     @classmethod
@@ -352,23 +361,39 @@ async def create_coach(
     db.add(user)
     await db.flush()
 
-    coach = Coach(user_id=user.id, is_active=True)
+    coach = Coach(user_id=user.id, is_active=True, credential=body.credential)
     db.add(coach)
 
-    await _audit(db, "coach_created", f"email={email} name={body.full_name}")
+    await _audit(db, "coach_created", f"email={email} name={body.full_name} credential={body.credential}")
     await db.commit()
     await db.refresh(user)
     await db.refresh(coach)
 
+    # Invitation email with login details — fire-and-forget, never blocks
+    try:
+        import asyncio
+        from app.integrations.sendgrid import sendgrid_service
+        asyncio.get_event_loop().run_in_executor(
+            None,
+            sendgrid_service.send_coach_invitation,
+            email, user.name, body.password, body.credential,
+        )
+    except Exception as exc:
+        logger.warning("Could not queue coach invitation email: %s", exc)
+
     logger.info("Admin %s created coach %s (%s)", admin_user.id, user.id, email)
     return {
         "status": "success",
-        "message": "Coach account created.",
+        "message": "Coach account created. An invitation email has been sent.",
         "data": {
+            "id": str(coach.id),
             "coach_id": str(coach.id),
             "user_id": str(user.id),
             "email": email,
             "full_name": user.name,
+            "credential": coach.credential,
+            "active": True,
+            "last_login": None,
         },
     }
 
@@ -390,6 +415,8 @@ async def list_coaches(
             "full_name": user.name,
             "email": user.email,
             "active": coach.is_active,
+            "credential": coach.credential,
+            "last_login": user.last_login_at.isoformat() if user.last_login_at else None,
         }
         for coach, user in rows
     ]
@@ -427,40 +454,75 @@ async def set_coach_active(
 # ---------------------------------------------------------------------------
 
 class BillingUpdate(BaseModel):
-    submission_price: float
+    submission_price: Optional[float] = None
+    all_submissions_free: Optional[bool] = None
 
     @field_validator("submission_price")
     @classmethod
-    def price_positive(cls, v: float) -> float:
-        if v <= 0:
+    def price_positive(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and v <= 0:
             raise ValueError("submission_price must be positive.")
         return v
 
 
-@router.get("/billing", summary="Get current submission price")
-async def get_billing(admin_user: User = Depends(_require_admin)):
-    price_cents = admin_settings.get_submission_price_cents()
+@router.get("/billing", summary="Get current billing settings")
+async def get_billing(
+    db: AsyncSession = Depends(get_db),
+    admin_user: User = Depends(_require_admin),
+):
+    price_cents = await app_settings.get_int_setting(
+        db, "SUBMISSION_PRICE_CENTS", admin_settings.get_submission_price_cents()
+    )
+    free_mode = await app_settings.get_bool_setting(db, "ALL_SUBMISSIONS_FREE", False)
     return {
         "status": "success",
-        "data": {"submission_price": round(price_cents / 100, 2)},
+        "data": {
+            "submission_price": round(price_cents / 100, 2),
+            "all_submissions_free": free_mode,
+        },
     }
 
 
-@router.put("/billing", summary="Update submission price")
+@router.put("/billing", summary="Update submission price and/or free mode")
 async def update_billing(
     body: BillingUpdate,
     db: AsyncSession = Depends(get_db),
     admin_user: User = Depends(_require_admin),
 ):
-    new_cents = round(body.submission_price * 100)
-    admin_settings.set_override("SUBMISSION_PRICE_CENTS", new_cents)
-    await _audit(db, "price_changed", f"new_price={body.submission_price}")
+    if body.submission_price is not None:
+        new_cents = round(body.submission_price * 100)
+        await app_settings.set_setting(db, "SUBMISSION_PRICE_CENTS", str(new_cents))
+        try:
+            admin_settings.set_override("SUBMISSION_PRICE_CENTS", new_cents)
+        except ValueError:
+            pass
+        await _audit(db, "price_changed", f"new_price={body.submission_price}")
+        logger.info("Admin %s updated price to %.2f", admin_user.id, body.submission_price)
+
+    if body.all_submissions_free is not None:
+        await app_settings.set_setting(
+            db, "ALL_SUBMISSIONS_FREE", "1" if body.all_submissions_free else "0"
+        )
+        await _audit(
+            db, "free_mode_changed", f"all_submissions_free={body.all_submissions_free}"
+        )
+        logger.info(
+            "Admin %s set ALL_SUBMISSIONS_FREE=%s", admin_user.id, body.all_submissions_free
+        )
+
     await db.commit()
-    logger.info("Admin %s updated price to %.2f", admin_user.id, body.submission_price)
+
+    price_cents = await app_settings.get_int_setting(
+        db, "SUBMISSION_PRICE_CENTS", admin_settings.get_submission_price_cents()
+    )
+    free_mode = await app_settings.get_bool_setting(db, "ALL_SUBMISSIONS_FREE", False)
     return {
         "status": "success",
-        "message": "Price updated.",
-        "data": {"submission_price": body.submission_price},
+        "message": "Billing settings updated.",
+        "data": {
+            "submission_price": round(price_cents / 100, 2),
+            "all_submissions_free": free_mode,
+        },
     }
 
 
@@ -869,4 +931,131 @@ async def get_settings(admin_user: User = Depends(_require_admin)):
         "status": "success",
         "message": "Current effective settings.",
         "data": admin_settings.get_effective_settings(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Coach Payout Tracking
+# ---------------------------------------------------------------------------
+
+class PayoutRatesUpdate(BaseModel):
+    review_rate: float
+    pga_approval_rate: float
+
+    @field_validator("review_rate", "pga_approval_rate")
+    @classmethod
+    def rate_non_negative(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError("Rates cannot be negative.")
+        return v
+
+
+async def _get_payout_rates_cents(db: AsyncSession) -> tuple:
+    review = await app_settings.get_int_setting(db, "PAYOUT_REVIEW_RATE_CENTS", 1000)
+    approval = await app_settings.get_int_setting(db, "PAYOUT_PGA_APPROVAL_CENTS", 200)
+    return review, approval
+
+
+@router.get("/payouts/rates", summary="Get coach payout rates")
+async def get_payout_rates(
+    db: AsyncSession = Depends(get_db),
+    admin_user: User = Depends(_require_admin),
+):
+    review, approval = await _get_payout_rates_cents(db)
+    return {
+        "status": "success",
+        "data": {
+            "review_rate": round(review / 100, 2),
+            "pga_approval_rate": round(approval / 100, 2),
+        },
+    }
+
+
+@router.put("/payouts/rates", summary="Update coach payout rates")
+async def update_payout_rates(
+    body: PayoutRatesUpdate,
+    db: AsyncSession = Depends(get_db),
+    admin_user: User = Depends(_require_admin),
+):
+    await app_settings.set_setting(db, "PAYOUT_REVIEW_RATE_CENTS", str(round(body.review_rate * 100)))
+    await app_settings.set_setting(db, "PAYOUT_PGA_APPROVAL_CENTS", str(round(body.pga_approval_rate * 100)))
+    await _audit(db, "payout_rates_changed", f"review={body.review_rate} pga_approval={body.pga_approval_rate}")
+    await db.commit()
+    logger.info("Admin %s set payout rates review=%.2f approval=%.2f",
+                admin_user.id, body.review_rate, body.pga_approval_rate)
+    return {
+        "status": "success",
+        "message": "Payout rates updated.",
+        "data": {
+            "review_rate": body.review_rate,
+            "pga_approval_rate": body.pga_approval_rate,
+        },
+    }
+
+
+def _coach_balance_dict(coach: Coach, user: User, review_cents: int, approval_cents: int) -> dict:
+    period_owed_cents = coach.period_reviews * review_cents
+    if coach.credential == "pga_pro":
+        period_owed_cents += coach.period_approvals * approval_cents
+    return {
+        "id": str(coach.id),
+        "full_name": user.name,
+        "email": user.email,
+        "credential": coach.credential,
+        "period_reviews": coach.period_reviews,
+        "period_approvals": coach.period_approvals,
+        "period_owed": round(period_owed_cents / 100, 2),
+        "lifetime_reviews": coach.lifetime_reviews,
+        "lifetime_approvals": coach.lifetime_approvals,
+        "lifetime_paid": round(coach.lifetime_paid_cents / 100, 2),
+    }
+
+
+@router.get("/payouts", summary="List every coach's payout balance")
+async def list_payout_balances(
+    db: AsyncSession = Depends(get_db),
+    admin_user: User = Depends(_require_admin),
+):
+    review_cents, approval_cents = await _get_payout_rates_cents(db)
+    rows = (await db.execute(
+        select(Coach, User)
+        .join(User, User.id == Coach.user_id)
+        .order_by(Coach.created_at.desc())
+    )).all()
+    items = [_coach_balance_dict(c, u, review_cents, approval_cents) for c, u in rows]
+    return {"status": "success", "data": {"items": items}}
+
+
+@router.post("/payouts/{coach_id}/mark-paid", summary="Mark a coach as paid (resets period counters)")
+async def mark_coach_paid(
+    coach_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    admin_user: User = Depends(_require_admin),
+):
+    result = await db.execute(
+        select(Coach, User).join(User, User.id == Coach.user_id).where(Coach.id == coach_id)
+    )
+    row = result.one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Coach not found.")
+    coach, user = row
+
+    review_cents, approval_cents = await _get_payout_rates_cents(db)
+    owed_cents = coach.period_reviews * review_cents
+    if coach.credential == "pga_pro":
+        owed_cents += coach.period_approvals * approval_cents
+
+    coach.lifetime_paid_cents += owed_cents
+    coach.period_reviews = 0
+    coach.period_approvals = 0
+
+    await _audit(db, "coach_marked_paid", f"coach_id={coach_id} amount_cents={owed_cents}")
+    await db.commit()
+    await db.refresh(coach)
+
+    logger.info("Admin %s marked coach %s paid: %d cents", admin_user.id, coach_id, owed_cents)
+    return {
+        "status": "success",
+        "message": f"Marked as paid: ${owed_cents / 100:.2f}",
+        "data": _coach_balance_dict(coach, user, review_cents, approval_cents),
     }

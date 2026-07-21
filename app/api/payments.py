@@ -88,9 +88,17 @@ async def create_payment_intent(
 ):
     rid = _request_id(request)
 
-    # ── 1. Base price from runtime admin settings ──────────────────────────
-    amount_cents: int = admin_settings.get_submission_price_cents()
+    # ── 1. Base price from persistent admin settings ───────────────────────
+    from app.services import app_settings
+    amount_cents: int = await app_settings.get_int_setting(
+        db, "SUBMISSION_PRICE_CENTS", admin_settings.get_submission_price_cents()
+    )
     free_reason: Optional[str] = None
+
+    # ── 1b. Admin testing free-mode: everything is free for everyone ───────
+    if await app_settings.get_bool_setting(db, "ALL_SUBMISSIONS_FREE", False):
+        amount_cents = 0
+        free_reason = "free_mode_all"
 
     # ── 2. First-submission-free (launch promotion) ─────────────────────────
     completed_sub_count_row = await db.execute(

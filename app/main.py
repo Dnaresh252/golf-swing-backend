@@ -183,7 +183,14 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     if isinstance(exc.detail, dict):
         content = {"status": "error", "request_id": _request_id(request), **exc.detail}
     else:
-        content = {"status": "error", "message": exc.detail, "request_id": _request_id(request)}
+        # Keep `detail` too — the frontend reads response.data.detail for
+        # user-facing messages (e.g. the suspended-account popup)
+        content = {
+            "status": "error",
+            "message": exc.detail,
+            "detail": exc.detail,
+            "request_id": _request_id(request),
+        }
     return JSONResponse(status_code=exc.status_code, content=content)
 
 

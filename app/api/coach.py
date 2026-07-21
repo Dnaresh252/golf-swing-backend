@@ -445,3 +445,224 @@ async def reject_posting(
         "message": "Posting rejected. User has been notified.",
         "data": None,
     }
+
+
+# ---------------------------------------------------------------------------
+# PGA Pro approval queue — only accounts with credential "pga_pro"
+# ---------------------------------------------------------------------------
+
+async def get_current_pga_pro(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> tuple[User, Coach]:
+    result = await db.execute(select(Coach).where(Coach.user_id == current_user.id))
+    coach: Optional[Coach] = result.scalar_one_or_none()
+    if coach is None or not coach.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Coach account required.",
+        )
+    if coach.credential != "pga_pro":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="PGA Pro credential required.",
+        )
+    return current_user, coach
+
+
+@router.get("/pga-approvals", summary="Submissions awaiting PGA Pro sign-off")
+async def get_pga_approvals(
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    auth: tuple = Depends(get_current_pga_pro),
+):
+    from sqlalchemy import func as _func
+    total_row = await db.execute(
+        select(_func.count()).select_from(Submission).where(
+            Submission.status == SubmissionStatus.PGA_APPROVAL
+        )
+    )
+    total = total_row.scalar() or 0
+
+    rows = (await db.execute(
+        select(Submission, User.name, User.email)
+        .join(User, User.id == Submission.user_id)
+        .where(Submission.status == SubmissionStatus.PGA_APPROVAL)
+        .order_by(Submission.updated_at.asc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+    )).all()
+
+    coach_ids = [s.coach_id for s, _, _ in rows if s.coach_id]
+    coach_names = {}
+    if coach_ids:
+        coach_rows = (await db.execute(
+            select(Coach.id, User.name)
+            .join(User, User.id == Coach.user_id)
+            .where(Coach.id.in_(coach_ids))
+        )).all()
+        coach_names = {cid: name for cid, name in coach_rows}
+
+    items = [
+        {
+            "id": str(sub.id),
+            "submission_id": str(sub.id),
+            "user_name": uname,
+            "user_email": uemail,
+            "club_type": sub.club_type,
+            "coach_id": str(sub.coach_id) if sub.coach_id else None,
+            "coach_name": coach_names.get(sub.coach_id),
+            "status": sub.status.value,
+            "updated_at": sub.updated_at.isoformat(),
+            "created_at": sub.created_at.isoformat(),
+        }
+        for sub, uname, uemail in rows
+    ]
+    import math as _math
+    return {
+        "status": "success",
+        "message": "PGA approval queue retrieved.",
+        "data": {
+            "items": items,
+            "total": total,
+            "page": page,
+            "pages": max(1, _math.ceil(total / limit)) if total else 1,
+            "limit": limit,
+        },
+    }
+
+
+@router.post(
+    "/pga-approvals/{submission_id}/approve",
+    summary="PGA Pro releases a golf-coach correction to the user",
+)
+async def pga_approve(
+    submission_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    auth: tuple = Depends(get_current_pga_pro),
+):
+    _, pga_coach = auth
+    result = await db.execute(
+        select(Submission).where(Submission.id == submission_id)
+    )
+    submission = result.scalar_one_or_none()
+    if submission is None or submission.status != SubmissionStatus.PGA_APPROVAL:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Submission is not awaiting PGA approval.",
+        )
+
+    submission.status = SubmissionStatus.CORRECTIONS_MADE
+    submission.pga_sendback_reason = None
+
+    # PGA approval bonus counters (approving another coach's work)
+    pga_coach.period_approvals += 1
+    pga_coach.lifetime_approvals += 1
+
+    await db.commit()
+
+    # Notify the user their corrections are ready
+    try:
+        user_row = await db.execute(select(User).where(User.id == submission.user_id))
+        user = user_row.scalar_one_or_none()
+        if user:
+            import asyncio
+            from app.integrations.sendgrid import sendgrid_service
+            asyncio.get_event_loop().run_in_executor(
+                None,
+                sendgrid_service.send_coach_review_complete,
+                user, str(submission_id), True,
+            )
+    except Exception as exc:
+        logger.warning("PGA approve email failed: %s", exc)
+
+    logger.info("PGA Pro %s released submission %s", pga_coach.id, submission_id)
+    return {
+        "status": "success",
+        "message": "Correction approved and released to the user.",
+        "data": None,
+    }
+
+
+@router.post(
+    "/pga-approvals/{submission_id}/send-back",
+    summary="PGA Pro sends a correction back to the original coach",
+)
+async def pga_send_back(
+    submission_id: uuid.UUID,
+    payload: CoachActionRequest,
+    db: AsyncSession = Depends(get_db),
+    auth: tuple = Depends(get_current_pga_pro),
+):
+    _, pga_coach = auth
+    reason = (payload.reason or "").strip()
+    if not reason:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A reason is required when sending back a correction.",
+        )
+
+    result = await db.execute(
+        select(Submission).where(Submission.id == submission_id)
+    )
+    submission = result.scalar_one_or_none()
+    if submission is None or submission.status != SubmissionStatus.PGA_APPROVAL:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Submission is not awaiting PGA approval.",
+        )
+
+    # Return to the original coach with the note; coach_id is unchanged
+    submission.status = SubmissionStatus.IN_REVIEW
+    submission.pga_sendback_reason = reason
+    await db.commit()
+
+    logger.info(
+        "PGA Pro %s sent submission %s back to coach %s",
+        pga_coach.id, submission_id, submission.coach_id,
+    )
+    return {
+        "status": "success",
+        "message": "Sent back to the original coach with your note.",
+        "data": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /coach/earnings — the logged-in coach's own payout numbers
+# ---------------------------------------------------------------------------
+
+@router.get("/earnings", summary="The logged-in coach's earnings")
+async def get_my_earnings(
+    db: AsyncSession = Depends(get_db),
+    auth: tuple = Depends(get_current_coach),
+):
+    user, coach = auth
+    from app.services import app_settings
+    review_cents = await app_settings.get_int_setting(db, "PAYOUT_REVIEW_RATE_CENTS", 1000)
+    approval_cents = await app_settings.get_int_setting(db, "PAYOUT_PGA_APPROVAL_CENTS", 200)
+
+    period_owed_cents = coach.period_reviews * review_cents
+    if coach.credential == "pga_pro":
+        period_owed_cents += coach.period_approvals * approval_cents
+
+    return {
+        "status": "success",
+        "data": {
+            "id": str(coach.id),
+            "full_name": user.name,
+            "email": user.email,
+            "credential": coach.credential,
+            "review_rate": round(review_cents / 100, 2),
+            "pga_approval_rate": round(approval_cents / 100, 2),
+            "period_reviews": coach.period_reviews,
+            "period_approvals": coach.period_approvals,
+            "period_owed": round(period_owed_cents / 100, 2),
+            "lifetime_reviews": coach.lifetime_reviews,
+            "lifetime_approvals": coach.lifetime_approvals,
+            "lifetime_paid": round(coach.lifetime_paid_cents / 100, 2),
+        },
+    }

@@ -104,6 +104,7 @@ class CoachProfileResponse(BaseModel):
     rating: float
     submissions_completed: int
     is_active: bool
+    credential: str = "golf_coach"
 
     model_config = {"from_attributes": True}
 

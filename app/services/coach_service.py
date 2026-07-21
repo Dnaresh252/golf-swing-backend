@@ -390,11 +390,26 @@ class CoachService:
         if submission is None:
             raise HTTPException(status_code=404, detail="Submission not found.")
 
-        submission.status = SubmissionStatus.CORRECTIONS_MADE
+        # Payout counters — every completed review counts, regardless of tier
+        coach_row = await db.execute(select(Coach).where(Coach.id == coach_id))
+        coach = coach_row.scalar_one_or_none()
+        if coach is not None:
+            coach.period_reviews += 1
+            coach.lifetime_reviews += 1
+
+        # Two-tier routing: golf_coach corrections need PGA Pro sign-off first;
+        # a PGA Pro's own correction releases directly to the user.
+        if coach is not None and coach.credential == "pga_pro":
+            submission.status = SubmissionStatus.CORRECTIONS_MADE
+            released = True
+        else:
+            submission.status = SubmissionStatus.PGA_APPROVAL
+            released = False
+        submission.pga_sendback_reason = None
         await db.flush()
         await self.release_lock(str(submission_id))
 
-        if submission.user:
+        if released and submission.user:
             _send_email_nowait(
                 submission.user.email,
                 submission.user.name,
@@ -402,7 +417,9 @@ class CoachService:
                 {"status_message": "Coach has reviewed your swing and made corrections."},
             )
 
-        logger.info("Submission approved by coach: %s", coach_id)
+        logger.info(
+            "Submission approved by coach %s (released=%s)", coach_id, released
+        )
         return True
 
     async def reject_submission(

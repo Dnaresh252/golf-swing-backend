@@ -52,7 +52,19 @@ async def get_corrections(
     current_user: User = Depends(get_current_user),
 ):
     rid = _request_id(request)
-    await _get_owned_submission(db, submission_id, current_user.id)
+    submission = await _get_owned_submission(db, submission_id, current_user.id)
+
+    # Corrections stay hidden until a PGA Pro has signed off
+    from app.models.submission import SubmissionStatus as _SS
+    if submission.status == _SS.PGA_APPROVAL:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "status": "error",
+                "message": "No corrections available yet.",
+                "request_id": rid,
+            },
+        )
 
     # Load corrected videos
     cv_result = await db.execute(

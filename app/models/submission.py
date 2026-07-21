@@ -28,6 +28,7 @@ class SubmissionStatus(str, enum.Enum):
     ANALYZING = "ANALYZING"
     READY_FOR_REVIEW = "READY_FOR_REVIEW"
     IN_REVIEW = "IN_REVIEW"
+    PGA_APPROVAL = "PGA_APPROVAL"  # golf-coach correction awaiting PGA Pro sign-off
     CORRECTIONS_MADE = "CORRECTIONS_MADE"
     COMPLETED = "COMPLETED"
     REJECTED = "REJECTED"
@@ -53,6 +54,8 @@ class Submission(Base):
     )
     club_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     avatar_choice: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Reason a PGA Pro sent a correction back to the original coach
+    pga_sendback_reason: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     status: Mapped[SubmissionStatus] = mapped_column(
         Enum(SubmissionStatus, name="submissionstatus"),
         nullable=False,

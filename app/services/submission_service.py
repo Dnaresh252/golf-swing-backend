@@ -29,6 +29,7 @@ STATUS_MESSAGES: Dict[SubmissionStatus, str] = {
     SubmissionStatus.ANALYZING:        "AI is analyzing your golf swing",
     SubmissionStatus.READY_FOR_REVIEW: "Ready for coach review",
     SubmissionStatus.IN_REVIEW:        "Coach is reviewing your swing",
+    SubmissionStatus.PGA_APPROVAL:     "Coach is reviewing your swing",  # PGA sign-off pending — user just sees "in review"
     SubmissionStatus.CORRECTIONS_MADE: "Coach has made corrections",
     SubmissionStatus.COMPLETED:        "Analysis complete",
     SubmissionStatus.REJECTED:         "Submission was rejected",

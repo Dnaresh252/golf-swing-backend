@@ -244,3 +244,163 @@ async def post_to_social(
             status="queued",
         ).model_dump(),
     }, status.HTTP_202_ACCEPTED
+
+
+# ---------------------------------------------------------------------------
+# POST /{submission_id}/verify-post — social post verification + free code
+# ---------------------------------------------------------------------------
+
+_GGW_YOUTUBE_HANDLE = "@golfgameworld"
+_GGW_TIKTOK_HANDLE = "@ggw0059"
+_GGW_HASHTAGS = ("#ggw", "#golfgameworld", "#ggwacademy")
+
+
+def _fetch_url(url: str, timeout: int = 12) -> tuple:
+    """Blocking fetch; returns (status_code, body_text). Runs in executor."""
+    import urllib.request
+    import urllib.error
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (GGW-Verify)"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, ""
+    except Exception:
+        return 0, ""
+
+
+from pydantic import BaseModel as _BaseModel
+
+
+class VerifyPostRequest(_BaseModel):
+    post_url: str
+    platform: str  # "youtube" or "tiktok"
+
+
+@router.post("/{submission_id}/verify-post", summary="Verify a public social post and grant a free code")
+async def verify_post(
+    submission_id: uuid.UUID,
+    body: VerifyPostRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rid = _request_id(request)
+    submission = await _get_owned_submission(db, submission_id, current_user.id)
+
+    platform = (body.platform or "").strip().lower()
+    post_url = (body.post_url or "").strip()
+
+    if platform not in ("youtube", "tiktok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="platform must be 'youtube' or 'tiktok'.",
+        )
+
+    # Basic URL sanity — must be a real link on the claimed platform
+    valid_hosts = {
+        "youtube": ("youtube.com/watch", "youtube.com/shorts", "youtu.be/"),
+        "tiktok": ("tiktok.com/",),
+    }
+    if not post_url.startswith(("http://", "https://")) or not any(
+        h in post_url for h in valid_hosts[platform]
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"That does not look like a valid {platform} post link.",
+        )
+
+    # Prevent double-claiming the reward for the same submission
+    sharing_row = await db.execute(
+        select(SocialSharing).where(SocialSharing.submission_id == submission_id)
+    )
+    sharing = sharing_row.scalar_one_or_none()
+    if sharing is not None and sharing.posted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A post for this submission has already been verified and rewarded.",
+        )
+
+    loop = asyncio.get_event_loop()
+
+    # ── 1. Post is public and reachable (oEmbed only resolves public posts) ──
+    if platform == "youtube":
+        oembed_url = f"https://www.youtube.com/oembed?url={post_url}&format=json"
+    else:
+        oembed_url = f"https://www.tiktok.com/oembed?url={post_url}"
+
+    oembed_status, oembed_body = await loop.run_in_executor(None, _fetch_url, oembed_url)
+    if oembed_status != 200 or not oembed_body:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The post could not be found or is not public. Make sure the video is public and the link is correct.",
+        )
+
+    import json as _json
+    try:
+        oembed = _json.loads(oembed_body)
+    except Exception:
+        oembed = {}
+
+    # ── 2. Caption / tags include our handle or hashtag ─────────────────────
+    searchable = (oembed.get("title") or "").lower()
+    # Also scan the public page HTML — YouTube descriptions are not in oEmbed
+    page_status, page_body = await loop.run_in_executor(None, _fetch_url, post_url)
+    if page_status == 200:
+        searchable += " " + page_body.lower()
+
+    handle = _GGW_YOUTUBE_HANDLE if platform == "youtube" else _GGW_TIKTOK_HANDLE
+    tagged = handle in searchable or any(tag in searchable for tag in _GGW_HASHTAGS)
+    if not tagged:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"The post does not tag us. Add {handle} or the #GGW hashtag "
+                "to the caption and try again."
+            ),
+        )
+
+    # ── 3. Grant a personal free submission code ─────────────────────────────
+    import secrets
+    from datetime import timedelta
+    from app.models.free_code import FreeCode
+
+    code = f"GGWFREE-{secrets.token_hex(4).upper()}"
+    free_code = FreeCode(
+        code=code,
+        max_uses=1,
+        expires_at=get_current_utc() + timedelta(days=90),
+    )
+    db.add(free_code)
+
+    # Record the verified post so it cannot be claimed twice
+    if sharing is None:
+        sharing = SocialSharing(
+            submission_id=submission_id,
+            user_id=current_user.id,
+            platforms=[platform],
+            opt_in=True,
+        )
+        db.add(sharing)
+    if platform == "youtube":
+        sharing.youtube_url = post_url
+    else:
+        sharing.tiktok_url = post_url
+    sharing.posted_at = get_current_utc()
+
+    await db.commit()
+
+    logger.info(
+        "Verified %s post for submission %s (user %s) — code %s granted",
+        platform, submission_id, current_user.id, code,
+    )
+    return {
+        "status": "success",
+        "verified": True,
+        "message": "Verified. A free submission code has been added to your account.",
+        "data": {
+            "verified": True,
+            "free_code": code,
+            "expires_in_days": 90,
+        },
+    }

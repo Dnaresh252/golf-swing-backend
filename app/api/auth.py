@@ -107,6 +107,12 @@ async def login(
     try:
         user = await auth_service.authenticate_user(db, payload.email, payload.password)
     except PermissionError as exc:
+        if "suspend" in str(exc).lower():
+            # Plain-string detail so the frontend suspended-account popup triggers
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This account has been suspended.",
+            )
         raise _error(str(exc), rid, status.HTTP_423_LOCKED)
     except ValueError as exc:
         raise _error(str(exc), rid, status.HTTP_401_UNAUTHORIZED)
@@ -147,6 +153,11 @@ async def coach_login(
             db, payload.email, payload.password
         )
     except PermissionError as exc:
+        if "suspend" in str(exc).lower():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This account has been suspended.",
+            )
         raise _error(str(exc), rid, status.HTTP_403_FORBIDDEN)
     except ValueError as exc:
         raise _error(str(exc), rid, status.HTTP_401_UNAUTHORIZED)
@@ -167,6 +178,7 @@ async def coach_login(
         "access_token": tokens["access_token"],
         "refresh_token": tokens["refresh_token"],
         "role": "coach",
+        "credential": data["coach"]["credential"],
         "user": data["user"],
         "data": data,
     }

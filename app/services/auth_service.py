@@ -101,7 +101,7 @@ class AuthService:
             raise PermissionError(ErrorMessage.ACCOUNT_INACTIVE)
 
         if getattr(user, "suspended", False):
-            raise PermissionError("Account is suspended. Contact support.")
+            raise PermissionError("This account has been suspended. Contact support.")
 
         await reset_failed_attempts(email)
         from datetime import datetime, timezone
@@ -132,7 +132,7 @@ class AuthService:
         if coach is None:
             raise PermissionError("Not authorized as coach.")
         if not coach.is_active:
-            raise PermissionError("Coach account is inactive.")
+            raise PermissionError("This account has been suspended.")
 
         logger.info("Coach authenticated: %s", email)
         return user, coach

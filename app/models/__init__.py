@@ -12,8 +12,10 @@ from app.models.payment import Payment
 from app.models.audit_log import AuditLog
 from app.models.announcement import Announcement
 from app.models.free_code import FreeCode
+from app.models.app_setting import AppSetting
 
 __all__ = [
+    "AppSetting",
     "User",
     "Coach",
     "Submission",

@@ -86,6 +86,8 @@ async def register(
         "message": "Registration successful. Please verify your email.",
         "access_token": tokens["access_token"],
         "refresh_token": tokens["refresh_token"],
+        "role": data["user"]["role"],
+        "user": data["user"],
         "data": data,
     }
 
@@ -123,6 +125,8 @@ async def login(
         "message": "Logged in successfully.",
         "access_token": tokens["access_token"],
         "refresh_token": tokens["refresh_token"],
+        "role": data["user"]["role"],
+        "user": data["user"],
         "data": data,
     }
 
@@ -162,6 +166,8 @@ async def coach_login(
         "message": "Coach logged in successfully.",
         "access_token": tokens["access_token"],
         "refresh_token": tokens["refresh_token"],
+        "role": "coach",
+        "user": data["user"],
         "data": data,
     }
 

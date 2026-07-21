@@ -95,13 +95,24 @@ async def get_my_profile(
 ):
     stats = await _get_user_stats(db, current_user.id)
 
+    if current_user.is_admin:
+        role = "admin"
+    else:
+        from app.models.coach import Coach
+        coach_row = await db.execute(
+            select(Coach.id).where(Coach.user_id == current_user.id)
+        )
+        role = "coach" if coach_row.scalar_one_or_none() is not None else "user"
+
     return {
         "status": "success",
         "message": "Profile retrieved.",
+        "role": role,
         "data": {
             "id": str(current_user.id),
             "email": current_user.email,
             "name": current_user.name,
+            "role": role,
             "bio": current_user.bio,
             "profile_picture_url": current_user.profile_picture_url,
             "public_profile_enabled": current_user.public_profile_enabled,

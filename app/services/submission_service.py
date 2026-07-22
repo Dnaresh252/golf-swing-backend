@@ -56,9 +56,18 @@ class SubmissionService:
     # ------------------------------------------------------------------
 
     async def create_submission(
-        self, db: AsyncSession, user_id: uuid.UUID, club_type: Optional[str] = None
+        self,
+        db: AsyncSession,
+        user_id: uuid.UUID,
+        club_type: Optional[str] = None,
+        avatar_skin_tone: Optional[str] = None,
     ) -> Submission:
-        submission = Submission(user_id=user_id, status=SubmissionStatus.PENDING, club_type=club_type)
+        submission = Submission(
+            user_id=user_id,
+            status=SubmissionStatus.PENDING,
+            club_type=club_type,
+            avatar_skin_tone=avatar_skin_tone,
+        )
         db.add(submission)
         await db.flush()
         # Re-fetch with relationships so the schema can access submission.files

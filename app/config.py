@@ -99,7 +99,7 @@ class Settings(BaseSettings):
     MAX_VIDEO_SIZE_MB: int = 100
     MAX_VIDEO_DURATION_SECONDS: int = 15
     ALLOWED_IMAGE_TYPES: List[str] = ["image/jpeg", "image/png"]
-    ALLOWED_VIDEO_TYPES: List[str] = ["video/mp4", "video/quicktime"]
+    ALLOWED_VIDEO_TYPES: List[str] = ["video/mp4", "video/quicktime", "video/webm"]
 
     # SendGrid
     SENDGRID_API_KEY: str

@@ -54,6 +54,8 @@ class Submission(Base):
     )
     club_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     avatar_choice: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Hex color chosen on the avatar picker, e.g. "#C68863"; null = default model tint
+    avatar_skin_tone: Mapped[Optional[str]] = mapped_column(String(9), nullable=True)
     # Reason a PGA Pro sent a correction back to the original coach
     pga_sendback_reason: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     status: Mapped[SubmissionStatus] = mapped_column(

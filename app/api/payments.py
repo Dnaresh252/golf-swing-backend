@@ -440,9 +440,24 @@ async def payment_history(
 
 @router.get("/config", summary="Return Stripe publishable key and current pricing")
 async def payment_config(
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    price_cents = admin_settings.get_submission_price_cents()
+    from app.services import app_settings
+
+    price_cents = await app_settings.get_int_setting(
+        db, "SUBMISSION_PRICE_CENTS", admin_settings.get_submission_price_cents()
+    )
+    all_free = await app_settings.get_bool_setting(db, "ALL_SUBMISSIONS_FREE", False)
+
+    completed_sub_count_row = await db.execute(
+        select(func.count()).select_from(Submission).where(
+            Submission.user_id == current_user.id,
+            Submission.status == SubmissionStatus.COMPLETED,
+        )
+    )
+    first_submission_free = (completed_sub_count_row.scalar() or 0) == 0
+
     return {
         "status": "success",
         "message": "Payment configuration retrieved.",
@@ -450,7 +465,8 @@ async def payment_config(
             "publishable_key": settings.STRIPE_PUBLISHABLE_KEY,
             "submission_price": round(price_cents / 100, 2),
             "submission_price_cents": price_cents,
-            "first_submission_free": True,
+            "first_submission_free": first_submission_free,
+            "all_submissions_free": all_free,
             "currency": settings.STRIPE_CURRENCY,
             "discount_percentage": settings.DISCOUNT_PERCENTAGE,
         },

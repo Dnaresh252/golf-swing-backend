@@ -33,6 +33,65 @@ def _request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "unknown")
 
 
+async def _has_payment_or_free_eligibility(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    submission_id: "uuid.UUID | None",
+) -> bool:
+    """
+    Server-side payment/free-eligibility gate — never trusts the frontend
+    called payments/create-intent first. Used at both submissions/create
+    and submit-for-analysis so neither can be reached without payment.
+    """
+    from datetime import timedelta
+    from app.models.payment import Payment, PaymentStatus
+    from app.services import app_settings
+    from app.utils.helpers import get_current_utc as _now
+
+    if await app_settings.get_bool_setting(db, "ALL_SUBMISSIONS_FREE", False):
+        return True
+
+    if submission_id is not None:
+        linked_row = await db.execute(
+            select(Payment).where(
+                Payment.submission_id == submission_id,
+                Payment.user_id == user_id,
+                Payment.status == PaymentStatus.COMPLETED,
+            ).limit(1)
+        )
+        if linked_row.scalar_one_or_none() is not None:
+            return True
+
+    # Claim the most recent unlinked completed payment (create-intent runs
+    # before submissions/create exists, so the payment has no submission yet)
+    recent_cutoff = _now() - timedelta(hours=48)
+    unclaimed_row = await db.execute(
+        select(Payment).where(
+            Payment.user_id == user_id,
+            Payment.status == PaymentStatus.COMPLETED,
+            Payment.submission_id.is_(None),
+            Payment.created_at >= recent_cutoff,
+        ).order_by(Payment.created_at.desc()).limit(1)
+    )
+    unclaimed = unclaimed_row.scalar_one_or_none()
+    if unclaimed is not None:
+        if submission_id is not None:
+            unclaimed.submission_id = submission_id
+            await db.flush()
+        return True
+
+    # First-submission-free rule, evaluated independently on the server
+    from sqlalchemy import func as _func
+    prior_row = await db.execute(
+        select(_func.count()).select_from(Submission).where(
+            Submission.user_id == user_id,
+            Submission.id != (submission_id if submission_id is not None else uuid.uuid4()),
+            Submission.status.notin_([SubmissionStatus.PENDING, SubmissionStatus.UPLOADING, SubmissionStatus.REJECTED]),
+        )
+    )
+    return (prior_row.scalar() or 0) == 0
+
+
 # ---------------------------------------------------------------------------
 # POST /submissions/create
 # ---------------------------------------------------------------------------
@@ -49,7 +108,21 @@ async def create_submission(
     current_user: User = Depends(get_current_user),
 ):
     club_type = body.club_type if body else None
-    submission = await submission_service.create_submission(db, current_user.id, club_type=club_type)
+    avatar_skin_tone = body.avatar_skin_tone if body else None
+
+    # ── Server-side payment / free-eligibility enforcement (create time) ────
+    # The frontend now calls create-intent before submissions/create, but the
+    # server never trusts that happened — same gate as submit-for-analysis.
+    allowed = await _has_payment_or_free_eligibility(db, current_user.id, submission_id=None)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Payment required before creating a submission.",
+        )
+
+    submission = await submission_service.create_submission(
+        db, current_user.id, club_type=club_type, avatar_skin_tone=avatar_skin_tone
+    )
     logger.info("Submission created: %s by user: %s", submission.id, current_user.id)
     return {
         "status": "success",
@@ -146,56 +219,7 @@ async def submit_for_analysis(
 ):
     # ── Server-side payment / free-eligibility enforcement ──────────────
     # Do not trust that the frontend went through the payment page first.
-    from datetime import timedelta
-    from sqlalchemy import func as _func, select as _select
-    from app.models.payment import Payment, PaymentStatus
-    from app.models.submission import Submission as _Sub, SubmissionStatus as _SS
-    from app.services import app_settings
-    from app.utils.helpers import get_current_utc as _now
-
-    free_mode = await app_settings.get_bool_setting(db, "ALL_SUBMISSIONS_FREE", False)
-    allowed = free_mode
-
-    if not allowed:
-        # A payment already linked to this submission
-        linked_row = await db.execute(
-            _select(Payment).where(
-                Payment.submission_id == submission_id,
-                Payment.user_id == current_user.id,
-                Payment.status == PaymentStatus.COMPLETED,
-            ).limit(1)
-        )
-        allowed = linked_row.scalar_one_or_none() is not None
-
-    if not allowed:
-        # Claim the most recent unlinked completed payment (the payment page
-        # creates the payment before the submission exists)
-        recent_cutoff = _now() - timedelta(hours=48)
-        unclaimed_row = await db.execute(
-            _select(Payment).where(
-                Payment.user_id == current_user.id,
-                Payment.status == PaymentStatus.COMPLETED,
-                Payment.submission_id.is_(None),
-                Payment.created_at >= recent_cutoff,
-            ).order_by(Payment.created_at.desc()).limit(1)
-        )
-        unclaimed = unclaimed_row.scalar_one_or_none()
-        if unclaimed is not None:
-            unclaimed.submission_id = submission_id
-            await db.flush()
-            allowed = True
-
-    if not allowed:
-        # First-submission-free rule, evaluated independently on the server
-        prior_row = await db.execute(
-            _select(_func.count()).select_from(_Sub).where(
-                _Sub.user_id == current_user.id,
-                _Sub.id != submission_id,
-                _Sub.status.notin_([_SS.PENDING, _SS.UPLOADING, _SS.REJECTED]),
-            )
-        )
-        allowed = (prior_row.scalar() or 0) == 0
-
+    allowed = await _has_payment_or_free_eligibility(db, current_user.id, submission_id)
     if not allowed:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,

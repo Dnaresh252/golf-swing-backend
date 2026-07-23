@@ -91,8 +91,11 @@ async def get_stats(
     subs_month = await _count_subs(month_start)
 
     total_users_row = await db.execute(
-        select(func.count()).select_from(User).where(
+        select(func.count()).select_from(User)
+        .outerjoin(Coach, Coach.user_id == User.id)
+        .where(
             User.is_admin == False,  # noqa: E712
+            Coach.id == None,  # noqa: E711
         )
     )
     total_users = total_users_row.scalar() or 0
@@ -148,10 +151,16 @@ async def list_users(
     per_page = 50
     offset = (page - 1) * per_page
 
+    # Regular user accounts only — coaches and admins are managed on their
+    # own endpoints and must never appear here (Fix 3, 2026-07-23).
     q = (
         select(User, func.count(Submission.id).label("submissions_count"))
         .outerjoin(Submission, Submission.user_id == User.id)
-        .where(User.is_admin == False)  # noqa: E712
+        .outerjoin(Coach, Coach.user_id == User.id)
+        .where(
+            User.is_admin == False,  # noqa: E712
+            Coach.id == None,  # noqa: E711
+        )
         .group_by(User.id)
         .order_by(User.created_at.desc())
     )

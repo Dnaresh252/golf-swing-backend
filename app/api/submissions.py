@@ -80,16 +80,11 @@ async def _has_payment_or_free_eligibility(
             await db.flush()
         return True
 
-    # First-submission-free rule, evaluated independently on the server
-    from sqlalchemy import func as _func
-    prior_row = await db.execute(
-        select(_func.count()).select_from(Submission).where(
-            Submission.user_id == user_id,
-            Submission.id != (submission_id if submission_id is not None else uuid.uuid4()),
-            Submission.status.notin_([SubmissionStatus.PENDING, SubmissionStatus.UPLOADING, SubmissionStatus.REJECTED]),
-        )
-    )
-    return (prior_row.scalar() or 0) == 0
+    # No first-submission-free rule. Pricing is pay or discount/free code —
+    # the only free path besides those is the admin ALL_SUBMISSIONS_FREE
+    # toggle handled above. A real coach reviews and is paid for every
+    # submission, so an unpaid first swing is a direct cost, not a lost sale.
+    return False
 
 
 # ---------------------------------------------------------------------------

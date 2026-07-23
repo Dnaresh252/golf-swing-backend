@@ -450,13 +450,10 @@ async def payment_config(
     )
     all_free = await app_settings.get_bool_setting(db, "ALL_SUBMISSIONS_FREE", False)
 
-    completed_sub_count_row = await db.execute(
-        select(func.count()).select_from(Submission).where(
-            Submission.user_id == current_user.id,
-            Submission.status == SubmissionStatus.COMPLETED,
-        )
-    )
-    first_submission_free = (completed_sub_count_row.scalar() or 0) == 0
+    # No first-submission-free concept in this business. Pricing is pay or
+    # discount/free code; the only free path is the admin testing toggle
+    # above. Field kept for frontend compatibility but always false.
+    first_submission_free = False
 
     return {
         "status": "success",

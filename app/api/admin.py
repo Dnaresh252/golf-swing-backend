@@ -432,6 +432,31 @@ async def list_coaches(
     return {"status": "success", "data": {"items": items}}
 
 
+@router.delete("/coaches/{coach_id}", summary="Permanently delete a coach account")
+async def delete_coach(
+    coach_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    admin_user: User = Depends(_require_admin),
+):
+    result = await db.execute(
+        select(Coach, User).join(User, User.id == Coach.user_id).where(Coach.id == coach_id)
+    )
+    row = result.one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Coach not found.")
+    coach, user = row
+
+    email = user.email
+    # Deleting the User row cascades (DB-level ON DELETE CASCADE) to the
+    # Coach row and every submission/payment/etc it owns — same mechanism
+    # already verified working for regular student account deletion.
+    await _audit(db, "coach_deleted", f"coach_id={coach_id} user_id={user.id} email={email}")
+    await db.delete(user)
+    await db.commit()
+    logger.info("Admin %s deleted coach %s (user %s, %s)", admin_user.id, coach_id, user.id, email)
+    return {"status": "success", "message": "Coach account deleted."}
+
+
 class SetCoachActiveRequest(BaseModel):
     active: bool
 

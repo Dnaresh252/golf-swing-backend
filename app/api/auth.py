@@ -105,15 +105,18 @@ async def login(
     await login_rate_limiter(request)  # explicit call — runs before any auth logic
     rid = _request_id(request)
     try:
-        user = await auth_service.authenticate_user(db, payload.email, payload.password)
+        user = await auth_service.authenticate_public_user(db, payload.email, payload.password)
     except PermissionError as exc:
-        if "suspend" in str(exc).lower():
+        msg = str(exc)
+        if "suspend" in msg.lower():
             # Plain-string detail so the frontend suspended-account popup triggers
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="This account has been suspended.",
             )
-        raise _error(str(exc), rid, status.HTTP_423_LOCKED)
+        if "this portal is for" in msg.lower():
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=msg)
+        raise _error(msg, rid, status.HTTP_423_LOCKED)
     except ValueError as exc:
         raise _error(str(exc), rid, status.HTTP_401_UNAUTHORIZED)
 
@@ -179,6 +182,51 @@ async def coach_login(
         "refresh_token": tokens["refresh_token"],
         "role": "coach",
         "credential": data["coach"]["credential"],
+        "user": data["user"],
+        "data": data,
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /admin-login — admin portal only, rejects students and coaches
+# ---------------------------------------------------------------------------
+
+@router.post("/admin-login", summary="Authenticate an admin")
+async def admin_login(
+    payload: UserLogin,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    await login_rate_limiter(request)
+    rid = _request_id(request)
+    try:
+        user = await auth_service.authenticate_admin(db, payload.email, payload.password)
+    except PermissionError as exc:
+        msg = str(exc)
+        if "suspend" in msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This account has been suspended.",
+            )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=msg)
+    except ValueError as exc:
+        raise _error(str(exc), rid, status.HTTP_401_UNAUTHORIZED)
+
+    tokens = auth_service.create_tokens(user.id)
+    logger.info("Admin logged in: %s", user.email)
+
+    data = AuthResponse(
+        tokens=TokenResponse(**tokens),
+        user=UserResponse.model_validate(user),
+    ).model_dump()
+    data["access_token"] = tokens["access_token"]
+
+    return {
+        "status": "success",
+        "message": "Admin logged in successfully.",
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens["refresh_token"],
+        "role": "admin",
         "user": data["user"],
         "data": data,
     }

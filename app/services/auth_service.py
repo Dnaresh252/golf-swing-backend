@@ -112,17 +112,41 @@ class AuthService:
         return user
 
     # ------------------------------------------------------------------
-    # Coach authentication
+    # Portal-scoped authentication
     # ------------------------------------------------------------------
+    # Three account types (user / coach / admin) x three login portals.
+    # Only the matching pair may succeed — a role must never be able to
+    # authenticate through a different portal's endpoint.
+
+    async def authenticate_public_user(
+        self, db: AsyncSession, email: str, password: str
+    ) -> User:
+        """
+        Public /login portal — regular student accounts only.
+        Rejects admin and coach accounts with a clear 403-worthy message.
+        """
+        user = await self.authenticate_user(db, email, password)
+
+        if user.is_admin:
+            raise PermissionError("This portal is for students only.")
+
+        result = await db.execute(select(Coach).where(Coach.user_id == user.id))
+        if result.scalar_one_or_none() is not None:
+            raise PermissionError("This portal is for students only.")
+
+        return user
 
     async def authenticate_coach(
         self, db: AsyncSession, email: str, password: str
     ) -> Tuple[User, Coach]:
         """
-        Authenticate user and verify an active coach profile exists.
+        Coach portal — active coach accounts only.
         Raises ValueError / PermissionError on failure.
         """
         user = await self.authenticate_user(db, email, password)
+
+        if user.is_admin:
+            raise PermissionError("This portal is for coaches only.")
 
         result = await db.execute(
             select(Coach).where(Coach.user_id == user.id)
@@ -136,6 +160,20 @@ class AuthService:
 
         logger.info("Coach authenticated: %s", email)
         return user, coach
+
+    async def authenticate_admin(
+        self, db: AsyncSession, email: str, password: str
+    ) -> User:
+        """
+        Admin portal — admin accounts only. Coaches and students rejected.
+        """
+        user = await self.authenticate_user(db, email, password)
+
+        if not user.is_admin:
+            raise PermissionError("This portal is for administrators only.")
+
+        logger.info("Admin authenticated: %s", email)
+        return user
 
     # ------------------------------------------------------------------
     # Token management

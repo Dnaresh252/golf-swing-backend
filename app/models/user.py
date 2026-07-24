@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import Boolean, DateTime, Index, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, Index, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,6 +30,8 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     profile_picture_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     bio: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    home_club: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    handicap_index: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     public_profile_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )

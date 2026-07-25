@@ -513,6 +513,10 @@ async def get_billing(
         "data": {
             "submission_price": round(price_cents / 100, 2),
             "all_submissions_free": free_mode,
+            "all_submissions_free_warning": (
+                "WARNING: All submissions are currently free. Disable this before accepting real payments."
+                if free_mode else None
+            ),
         },
     }
 
@@ -556,6 +560,10 @@ async def update_billing(
         "data": {
             "submission_price": round(price_cents / 100, 2),
             "all_submissions_free": free_mode,
+            "all_submissions_free_warning": (
+                "WARNING: All submissions are currently free. Disable this before accepting real payments."
+                if free_mode else None
+            ),
         },
     }
 

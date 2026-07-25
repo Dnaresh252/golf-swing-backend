@@ -303,6 +303,20 @@ async def get_public_announcement():
     async with AsyncSessionLocal() as db:
         result = await db.execute(sa_select(AnnouncementModel).limit(1))
         ann = result.scalar_one_or_none()
+        has_banner = ann is not None and ann.active and ann.message
+
+        if not has_banner:
+            from app.services import app_settings
+            free_mode = await app_settings.get_bool_setting(db, "ALL_SUBMISSIONS_FREE", False)
+            if free_mode:
+                return {
+                    "status": "success",
+                    "data": {
+                        "message": "All submissions are currently free.",
+                        "active": True,
+                    },
+                }
+
     if ann is None:
         return {"status": "success", "data": {"message": "", "active": False}}
     return {"status": "success", "data": {"message": ann.message, "active": ann.active}}

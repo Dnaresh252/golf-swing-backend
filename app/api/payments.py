@@ -100,19 +100,6 @@ async def create_payment_intent(
         amount_cents = 0
         free_reason = "free_mode_all"
 
-    # ── 2. First-submission-free (launch promotion) ─────────────────────────
-    completed_sub_count_row = await db.execute(
-        select(func.count()).select_from(Submission).where(
-            Submission.user_id == current_user.id,
-            Submission.status == SubmissionStatus.COMPLETED,
-        )
-    )
-    completed_sub_count: int = completed_sub_count_row.scalar() or 0
-
-    if completed_sub_count == 0 and not body.skip_free_option:
-        amount_cents = 0
-        free_reason = "first_submission_free"
-
     # ── 3. Free code redemption ─────────────────────────────────────────────
     free_code_record: Optional[FreeCode] = None
     if body.free_code and amount_cents > 0:

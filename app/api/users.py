@@ -398,3 +398,15 @@ async def deactivate_account(
 
     logger.info("User %s deactivated their own account", current_user.id)
     return {"status": "success", "message": "Your account has been deactivated."}
+
+
+@router.delete("/me", summary="Deactivate the current user's own account (alias)")
+async def deactivate_account_alias(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # V6.2 frontend calls DELETE /users/me for the same self-deactivate
+    # action as POST /users/deactivate above. Kept as two routes rather
+    # than changing either side, since both are now live in the wild.
+    return await deactivate_account(request, db, current_user)

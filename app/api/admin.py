@@ -415,6 +415,7 @@ async def list_coaches(
     rows = (await db.execute(
         select(Coach, User)
         .join(User, User.id == Coach.user_id)
+        .where(User.is_active == True)  # noqa: E712 — hide soft-deleted coaches
         .order_by(Coach.created_at.desc())
     )).all()
 
@@ -432,7 +433,7 @@ async def list_coaches(
     return {"status": "success", "data": {"items": items}}
 
 
-@router.delete("/coaches/{coach_id}", summary="Permanently delete a coach account")
+@router.delete("/coaches/{coach_id}", summary="Soft-delete a coach account (preserves history)")
 async def delete_coach(
     coach_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -447,13 +448,14 @@ async def delete_coach(
     coach, user = row
 
     email = user.email
-    # Deleting the User row cascades (DB-level ON DELETE CASCADE) to the
-    # Coach row and every submission/payment/etc it owns — same mechanism
-    # already verified working for regular student account deletion.
+    # Soft delete — same convention as student self-deactivate. Flips
+    # is_active off (blocks login, hides from GET /admin/coaches and the
+    # users list) but keeps the Coach row, lifetime payout totals, and
+    # every review/coach_notes record intact for bookkeeping and history.
+    user.is_active = False
     await _audit(db, "coach_deleted", f"coach_id={coach_id} user_id={user.id} email={email}")
-    await db.delete(user)
     await db.commit()
-    logger.info("Admin %s deleted coach %s (user %s, %s)", admin_user.id, coach_id, user.id, email)
+    logger.info("Admin %s soft-deleted coach %s (user %s, %s)", admin_user.id, coach_id, user.id, email)
     return {"status": "success", "message": "Coach account deleted."}
 
 

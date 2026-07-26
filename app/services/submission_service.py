@@ -289,11 +289,24 @@ class SubmissionService:
 
         self._validate_video_upload(content)
 
+        # Normalize every upload (mp4/mov/webm, including iPhone HEVC .mov)
+        # to H.264/AAC MP4 so it plays in desktop Chrome for coach review.
+        # Falls back to the original bytes if ffmpeg is unavailable or fails,
+        # so a transcode issue never blocks a valid submission.
+        transcoded = self._transcode_to_browser_mp4(content)
+        if transcoded is not None:
+            content = transcoded
+            upload_content_type = "video/mp4"
+            upload_filename = "video.mp4"
+        else:
+            upload_content_type = file.content_type
+            upload_filename = file.filename or "video"
+
         dest = b2_service.build_destination_path(
-            str(user_id), str(submission_id), "SWING_VIDEO", file.filename or "video"
+            str(user_id), str(submission_id), "SWING_VIDEO", upload_filename
         )
         try:
-            result = b2_service.upload_file(content, dest, file.content_type)
+            result = b2_service.upload_file(content, dest, upload_content_type)
         except RuntimeError as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -306,7 +319,7 @@ class SubmissionService:
             file_url=result["file_url"],
             b2_file_id=result["b2_file_id"],
             file_size_bytes=len(content),
-            mime_type=file.content_type,
+            mime_type=upload_content_type,
         ))
         await db.flush()
         await db.refresh(submission)
@@ -475,6 +488,56 @@ class SubmissionService:
                         "message": f"Video must be 30 seconds or less (yours is {duration:.1f}s).",
                     },
                 )
+
+    def _transcode_to_browser_mp4(self, content: bytes) -> Optional[bytes]:
+        """
+        Re-encode any uploaded video (mp4/mov/webm, including iPhone HEVC
+        .mov) to baseline-profile H.264 + AAC in an MP4 container, which
+        plays in every desktop browser without a codec pack. Returns None
+        on any failure so the caller can fall back to the original bytes
+        rather than block a valid submission on a transcode issue.
+        """
+        in_path: Optional[str] = None
+        out_path: Optional[str] = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".src", delete=False) as tmp_in:
+                tmp_in.write(content)
+                in_path = tmp_in.name
+            out_path = in_path + ".out.mp4"
+
+            proc = subprocess.run(
+                [
+                    settings.FFMPEG_PATH, "-y", "-i", in_path,
+                    "-c:v", "libx264", "-profile:v", "baseline", "-pix_fmt", "yuv420p",
+                    "-preset", "veryfast", "-crf", "23",
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-movflags", "+faststart",
+                    out_path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=120,
+            )
+            if proc.returncode != 0 or not os.path.exists(out_path):
+                logger.warning(
+                    "Video transcode failed (rc=%s) — storing original upload as-is: %s",
+                    proc.returncode, proc.stderr.decode(errors="replace")[:300],
+                )
+                return None
+
+            with open(out_path, "rb") as f:
+                return f.read()
+
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as exc:
+            logger.warning("Video transcode unavailable/failed — storing original upload as-is: %s", exc)
+            return None
+        finally:
+            for p in (in_path, out_path):
+                if p and os.path.exists(p):
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
 
     async def _send_status_email(self, submission: Submission, subject: str) -> None:
         """Send a status-change email via SendGrid.  Never raises."""

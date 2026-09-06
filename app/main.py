@@ -66,6 +66,7 @@ from app.api import (  # noqa: E402
     payments,
     practice,
     social,
+    stats,
     submissions,
     users,
 )
@@ -247,6 +248,7 @@ app.include_router(auth.router,        prefix=f"{API_PREFIX}/auth",        tags=
 app.include_router(auth_social.router, prefix=f"{API_PREFIX}",             tags=["Social Auth"])
 app.include_router(users.router,       prefix=f"{API_PREFIX}/users",       tags=["Users"])
 app.include_router(submissions.router, prefix=f"{API_PREFIX}/submissions",  tags=["Submissions"])
+app.include_router(stats.router,       prefix=f"{API_PREFIX}/stats",        tags=["Stats"])
 app.include_router(avatar.router,      prefix=f"{API_PREFIX}/avatar",       tags=["Avatar"])
 app.include_router(coach.router,       prefix=f"{API_PREFIX}/coach",        tags=["Coach"])
 app.include_router(corrections.router, prefix=f"{API_PREFIX}/corrections",  tags=["Corrections"])

@@ -87,7 +87,7 @@ class ErrorMessage:
     FILE_TOO_LARGE_VIDEO = "Video exceeds the maximum allowed size of 100 MB."
     VIDEO_TOO_LONG = "Video exceeds the maximum allowed duration of 15 seconds."
     INVALID_IMAGE_TYPE = "Invalid image format. Allowed: JPEG, PNG."
-    INVALID_VIDEO_TYPE = "Invalid video format. Allowed: MP4, MOV."
+    INVALID_VIDEO_TYPE = "Invalid video format. Allowed: MP4, MOV, WebM."
     FILE_UPLOAD_FAILED = "File upload failed. Please try again."
 
     # Coach

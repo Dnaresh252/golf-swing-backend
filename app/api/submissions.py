@@ -174,7 +174,7 @@ async def upload_images(
 
 @router.post(
     "/{submission_id}/upload-video",
-    summary="Upload the swing video (max 15 s, MP4/MOV). Upload images first.",
+    summary="Upload the swing video (max 15 s, MP4/MOV/WebM). Upload images first.",
 )
 async def upload_video(
     submission_id: uuid.UUID,

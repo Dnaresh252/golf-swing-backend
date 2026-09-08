@@ -21,15 +21,20 @@ router = APIRouter()
 _CACHE_TTL_SECONDS = 3600
 _cache: Dict[str, Any] = {"expires_at": 0.0, "payload": None}
 
+# Internal test accounts must never be counted as real golfers.
+_TEST_EMAIL_PATTERN = "%golftest.com"
+
 
 async def _build_payload(db: AsyncSession) -> Dict[str, Any]:
-    # Registered golfers. Deactivated and suspended accounts are
-    # excluded so the public number never counts people who are no
-    # longer really on the platform.
+    # Registered golfers. Excludes staff, deactivated and suspended
+    # accounts, and internal test accounts, so the public number only
+    # ever counts real people who are actually on the platform.
     users_count = await db.scalar(
         select(func.count(User.id)).where(
             User.is_active.is_(True),
             User.suspended.is_(False),
+            User.is_admin.is_(False),
+            ~User.email.ilike(_TEST_EMAIL_PATTERN),
         )
     )
 
@@ -49,18 +54,30 @@ async def _build_payload(db: AsyncSession) -> Dict[str, Any]:
         )
     )
 
-    # The date the platform actually opened: the first account created.
-    platform_since = await db.scalar(select(func.min(User.created_at)))
+    # The date the platform actually opened: the first real account.
+    platform_since = await db.scalar(
+        select(func.min(User.created_at)).where(
+            User.is_admin.is_(False),
+            ~User.email.ilike(_TEST_EMAIL_PATTERN),
+        )
+    )
 
-    return {
-        # `users` is the field the landing page reads. It renders
-        # nothing unless this is a finite number greater than zero.
-        "users": int(users_count or 0),
+    users = int(users_count or 0)
+    coaches = int(total_coaches or 0)
+
+    # Served in BOTH shapes on purpose. The deployed landing page reads
+    # the flat `users` field; the documented contract is the enveloped
+    # `data` object. Returning one without the other silently breaks a
+    # live page, so this endpoint answers to both.
+    body = {
+        "users": users,
+        "coaches": coaches,
         "total_submissions": int(total_submissions or 0),
-        "total_coaches": int(total_coaches or 0),
+        "total_coaches": coaches,
         "average_rating": round(float(average_rating), 2) if average_rating else None,
         "platform_since": platform_since.isoformat() if platform_since else None,
     }
+    return {"status": "success", **body, "data": dict(body)}
 
 
 @router.get(

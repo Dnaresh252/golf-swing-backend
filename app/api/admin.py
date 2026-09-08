@@ -1103,3 +1103,85 @@ async def mark_coach_paid(
         "message": f"Marked as paid: ${owed_cents / 100:.2f}",
         "data": _coach_balance_dict(coach, user, review_cents, approval_cents),
     }
+
+# ---------------------------------------------------------------------------
+# Instructor picker settings
+# ---------------------------------------------------------------------------
+
+class InstructorPickerUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    accept_window_hours: Optional[int] = None
+
+    @field_validator("accept_window_hours")
+    @classmethod
+    def window_at_least_one_hour(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v < 1:
+            raise ValueError("accept_window_hours must be at least 1.")
+        return v
+
+
+@router.get("/instructor-picker", summary="Get instructor picker settings")
+async def get_instructor_picker(
+    db: AsyncSession = Depends(get_db),
+    admin_user: User = Depends(_require_admin),
+):
+    enabled = await app_settings.get_bool_setting(
+        db, "INSTRUCTOR_PICKER_ENABLED", False
+    )
+    window = await app_settings.get_int_setting(
+        db, "INSTRUCTOR_ACCEPT_WINDOW_HOURS", 48
+    )
+    return {
+        "status": "success",
+        "data": {"enabled": enabled, "accept_window_hours": window},
+    }
+
+
+@router.put("/instructor-picker", summary="Update instructor picker settings")
+async def update_instructor_picker(
+    body: InstructorPickerUpdate,
+    db: AsyncSession = Depends(get_db),
+    admin_user: User = Depends(_require_admin),
+):
+    if body.enabled is None and body.accept_window_hours is None:
+        raise HTTPException(status_code=400, detail="Nothing to update.")
+
+    if body.enabled is not None:
+        await app_settings.set_setting(
+            db, "INSTRUCTOR_PICKER_ENABLED", "1" if body.enabled else "0"
+        )
+        await _audit(
+            db, "instructor_picker_changed", f"enabled={body.enabled}"
+        )
+        logger.info(
+            "Admin %s set INSTRUCTOR_PICKER_ENABLED=%s", admin_user.id, body.enabled
+        )
+
+    if body.accept_window_hours is not None:
+        await app_settings.set_setting(
+            db, "INSTRUCTOR_ACCEPT_WINDOW_HOURS", str(body.accept_window_hours)
+        )
+        await _audit(
+            db,
+            "instructor_accept_window_changed",
+            f"accept_window_hours={body.accept_window_hours}",
+        )
+        logger.info(
+            "Admin %s set INSTRUCTOR_ACCEPT_WINDOW_HOURS=%s",
+            admin_user.id,
+            body.accept_window_hours,
+        )
+
+    await db.commit()
+
+    enabled = await app_settings.get_bool_setting(
+        db, "INSTRUCTOR_PICKER_ENABLED", False
+    )
+    window = await app_settings.get_int_setting(
+        db, "INSTRUCTOR_ACCEPT_WINDOW_HOURS", 48
+    )
+    return {
+        "status": "success",
+        "message": "Instructor picker settings updated.",
+        "data": {"enabled": enabled, "accept_window_hours": window},
+    }

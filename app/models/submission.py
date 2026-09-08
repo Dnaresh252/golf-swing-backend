@@ -52,6 +52,17 @@ class Submission(Base):
         nullable=True,
         index=True,
     )
+    # Instructor picker: the instructor the user ASKED for. Distinct from
+    # coach_id above, which is the instructor actually reviewing.
+    requested_coach_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("coaches.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    instructor_request_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     club_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     avatar_choice: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     # Hex color chosen on the avatar picker, e.g. "#C68863"; null = default model tint
@@ -78,7 +89,16 @@ class Submission(Base):
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="submissions")
     coach: Mapped[Optional["Coach"]] = relationship(
-        "Coach", back_populates="submissions"
+        "Coach",
+        back_populates="submissions",
+        foreign_keys=[coach_id],
+    )
+    # The instructor the user asked for. Read-only convenience side; no
+    # back_populates so it never competes with .coach above.
+    requested_coach: Mapped[Optional["Coach"]] = relationship(
+        "Coach",
+        foreign_keys=[requested_coach_id],
+        viewonly=True,
     )
     files: Mapped[List["SubmissionFile"]] = relationship(
         "SubmissionFile", back_populates="submission", cascade="all, delete-orphan"

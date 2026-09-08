@@ -666,3 +666,74 @@ async def get_my_earnings(
             "lifetime_paid": round(coach.lifetime_paid_cents / 100, 2),
         },
     }
+
+# ---------------------------------------------------------------------------
+# GET /coach/instructors  (instructor picker)
+# ---------------------------------------------------------------------------
+
+_ALLOWED_PHOTO_PREFIXES = (
+    "https://f000.backblazeb2.com/",
+    "https://f001.backblazeb2.com/",
+    "https://f002.backblazeb2.com/",
+    "https://f003.backblazeb2.com/",
+    "https://f004.backblazeb2.com/",
+    "https://s3.us-west-000.backblazeb2.com/",
+    "https://s3.us-west-001.backblazeb2.com/",
+    "https://s3.us-west-002.backblazeb2.com/",
+    "https://s3.us-west-004.backblazeb2.com/",
+    "https://api.golfgameworldacademy.com/",
+    "https://golfgameworldacademy.com/",
+)
+
+
+def _safe_photo_url(raw):
+    """
+    The frontend drops this value straight into an <img src>. Only ever
+    hand back URLs pointing at storage we control - anything else (an
+    attacker-controlled or typo'd host stored on an instructor account)
+    would be fetched by every user's browser. Anything unrecognised
+    becomes None rather than being echoed back.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    url = raw.strip()
+    if not url.startswith(_ALLOWED_PHOTO_PREFIXES):
+        return None
+    return url
+
+
+@router.get("/instructors", summary="Active instructors available to request")
+async def list_instructors(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.services import app_settings as _app_settings
+
+    enabled = await _app_settings.get_bool_setting(
+        db, "INSTRUCTOR_PICKER_ENABLED", False
+    )
+    if not enabled:
+        # Feature off: behave as if the route does not exist.
+        raise HTTPException(status_code=404, detail="Not found.")
+
+    result = await db.execute(
+        select(Coach, User)
+        .join(User, Coach.user_id == User.id)
+        .where(
+            Coach.is_active.is_(True),
+            User.is_active.is_(True),
+            User.suspended.is_(False),
+        )
+        .order_by(User.name.asc())
+    )
+
+    instructors = [
+        {
+            "id": str(coach.id),
+            "name": user.name,
+            "photo_url": _safe_photo_url(user.profile_picture_url),
+        }
+        for coach, user in result.all()
+    ]
+
+    return {"status": "success", "data": {"instructors": instructors}}

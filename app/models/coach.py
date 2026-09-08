@@ -68,7 +68,12 @@ class Coach(Base):
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="coach_profile")
     submissions: Mapped[List["Submission"]] = relationship(
-        "Submission", back_populates="coach"
+        "Submission",
+        back_populates="coach",
+        # submissions now has TWO fks to coaches (coach_id and
+        # requested_coach_id), so the join has to be named explicitly.
+        # This relationship means "submissions I am reviewing".
+        foreign_keys="Submission.coach_id",
     )
     coach_notes: Mapped[List["CoachNotes"]] = relationship(
         "CoachNotes", back_populates="coach", cascade="all, delete-orphan"

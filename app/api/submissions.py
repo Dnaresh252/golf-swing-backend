@@ -446,3 +446,113 @@ async def delete_submission(
         "message": "Submission deleted successfully.",
         "data": None,
     }
+
+# ---------------------------------------------------------------------------
+# POST /submissions/{id}/instructor  (instructor picker)
+# ---------------------------------------------------------------------------
+
+from datetime import timedelta as _timedelta  # noqa: E402
+from pydantic import BaseModel as _BaseModel  # noqa: E402
+
+from app.models.coach import Coach as _Coach  # noqa: E402
+from app.services import app_settings as _app_settings  # noqa: E402
+from app.utils.rate_limit import make_rate_limiter  # noqa: E402
+
+# A user picking an instructor is a deliberate, low-frequency action.
+# This stops a script hammering the endpoint to enumerate instructor ids.
+_instructor_request_limiter = make_rate_limiter(20, 60)
+
+# Review has not started yet in these states. Once an instructor has the
+# submission in review, the pick is no longer meaningful.
+_PICKABLE_STATUSES = (
+    SubmissionStatus.PENDING,
+    SubmissionStatus.UPLOADING,
+    SubmissionStatus.ANALYZING,
+    SubmissionStatus.READY_FOR_REVIEW,
+)
+
+
+class InstructorRequestBody(_BaseModel):
+    coach_id: uuid.UUID
+
+
+@router.post(
+    "/{submission_id}/instructor",
+    summary="Request a specific instructor for this submission.",
+)
+async def request_instructor(
+    submission_id: uuid.UUID,
+    body: InstructorRequestBody,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    await _instructor_request_limiter(request)
+
+    # 1. Feature flag. Off means this route does not exist.
+    enabled = await _app_settings.get_bool_setting(
+        db, "INSTRUCTOR_PICKER_ENABLED", False
+    )
+    if not enabled:
+        raise HTTPException(status_code=404, detail="Not found.")
+
+    # 2. Ownership. Same generic 404 as corrections.py so this never
+    #    reveals whether someone else's submission id exists.
+    result = await db.execute(
+        select(Submission).where(Submission.id == submission_id)
+    )
+    submission = result.scalar_one_or_none()
+    if submission is None or submission.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Submission not found.")
+
+    # 3. Review must not have started.
+    if submission.status not in _PICKABLE_STATUSES or submission.coach_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This submission is already being reviewed.",
+        )
+
+    # 4. Instructor must exist and be active.
+    coach_result = await db.execute(
+        select(_Coach).where(_Coach.id == body.coach_id, _Coach.is_active.is_(True))
+    )
+    coach = coach_result.scalar_one_or_none()
+    if coach is None:
+        raise HTTPException(status_code=400, detail="Instructor not available.")
+
+    # 5. No request already pending on this submission.
+    now = get_current_utc()
+    has_pending = (
+        submission.requested_coach_id is not None
+        and submission.instructor_request_expires_at is not None
+        and submission.instructor_request_expires_at > now
+    )
+    if has_pending:
+        raise HTTPException(
+            status_code=409,
+            detail="An instructor has already been requested for this submission.",
+        )
+
+    window_hours = await _app_settings.get_int_setting(
+        db, "INSTRUCTOR_ACCEPT_WINDOW_HOURS", 48
+    )
+    submission.requested_coach_id = coach.id
+    submission.instructor_request_expires_at = now + _timedelta(hours=window_hours)
+    await db.commit()
+
+    logger.info(
+        "User %s requested instructor %s for submission %s (window %sh)",
+        current_user.id, coach.id, submission.id, window_hours,
+    )
+
+    return {
+        "status": "success",
+        "message": "Instructor requested.",
+        "data": {
+            "requested_coach_id": str(coach.id),
+            "instructor_request_expires_at": (
+                submission.instructor_request_expires_at.isoformat()
+            ),
+            "accept_window_hours": window_hours,
+        },
+    }

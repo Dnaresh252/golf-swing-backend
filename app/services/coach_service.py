@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import redis.asyncio as aioredis
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -69,7 +69,25 @@ class CoachService:
         else:
             statuses = list(_REVIEWABLE_STATUSES)
 
-        base_filter = Submission.status.in_(statuses)
+        # Instructor picker: while a request is pending and unexpired, the
+        # submission belongs only to the requested instructor's queue.
+        # Everyone else's queue must not show it. Once the deadline passes
+        # the beat task clears the request and it reappears for everyone;
+        # the time check here means an expired request stops hiding it even
+        # before that task next runs.
+        from app.utils.helpers import get_current_utc as _now_utc
+        _now = _now_utc()
+        _not_pinned_elsewhere = or_(
+            Submission.requested_coach_id.is_(None),
+            Submission.requested_coach_id == coach_id,
+            Submission.instructor_request_expires_at.is_(None),
+            Submission.instructor_request_expires_at < _now,
+        )
+
+        base_filter = and_(
+            Submission.status.in_(statuses),
+            _not_pinned_elsewhere,
+        )
 
         count_result = await db.execute(
             select(func.count(Submission.id)).where(base_filter)

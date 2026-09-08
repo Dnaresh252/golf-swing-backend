@@ -31,5 +31,9 @@ celery_app.conf.update(
             "task": "app.workers.avatar_tasks.detect_stuck_jobs",
             "schedule": 300,  # seconds
         },
+        "expire-instructor-requests-every-5-minutes": {
+            "task": "app.workers.instructor_tasks.expire_instructor_requests",
+            "schedule": 300,  # seconds
+        },
     },
 )

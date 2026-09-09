@@ -11,6 +11,8 @@ class CoachQueueItem(BaseModel):
     status: str
     created_at: datetime
     files_count: int
+    avatar_choice: Optional[str] = None
+    avatar_skin_tone: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

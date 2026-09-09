@@ -104,6 +104,19 @@ async def create_submission(
 ):
     club_type = body.club_type if body else None
     avatar_skin_tone = body.avatar_skin_tone if body else None
+    avatar_choice = body.avatar_choice if body else None
+
+    # Validated here as well as in the select-avatar endpoint. An
+    # unknown value would otherwise be stored happily and only surface
+    # as a broken avatar in the instructor tool much later.
+    if avatar_choice is not None and avatar_choice not in _VALID_AVATAR_CHOICES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Invalid avatar_choice '{avatar_choice}'. "
+                f"Must be one of: {', '.join(sorted(_VALID_AVATAR_CHOICES))}."
+            ),
+        )
 
     # ── Server-side payment / free-eligibility enforcement (create time) ────
     # The frontend now calls create-intent before submissions/create, but the
@@ -116,7 +129,8 @@ async def create_submission(
         )
 
     submission = await submission_service.create_submission(
-        db, current_user.id, club_type=club_type, avatar_skin_tone=avatar_skin_tone
+        db, current_user.id, club_type=club_type,
+        avatar_skin_tone=avatar_skin_tone, avatar_choice=avatar_choice,
     )
     logger.info("Submission created: %s by user: %s", submission.id, current_user.id)
     return {

@@ -858,17 +858,30 @@ async def reprocess_submission(
     if sub is None:
         raise HTTPException(status_code=404, detail="Submission not found.")
 
+    previous_status = sub.status
     sub.status = SubmissionStatus.ANALYZING
     await _audit(db, "submission_reprocessed", f"submission_id={submission_id}")
     await db.commit()
 
-    # Dispatch the Celery task
+    # This previously imported video_tasks.process_golf_swing, which does
+    # not exist. The ImportError was swallowed by the except below and the
+    # endpoint returned success anyway, so the button silently did nothing.
+    # The real analysis task is process_avatar_generation, the same one
+    # submit-for-analysis dispatches.
     try:
-        from app.workers.video_tasks import process_golf_swing
-        process_golf_swing.delay(str(submission_id))
+        from app.workers.avatar_tasks import process_avatar_generation
+        process_avatar_generation.delay(str(submission_id))
         logger.info("Admin %s triggered reprocess for submission %s", admin_user.id, submission_id)
     except Exception as exc:
-        logger.error("Failed to dispatch reprocess task for %s: %s", submission_id, exc)
+        # Never strand the submission in ANALYZING with no worker coming
+        # for it, and never report success for work that was not queued.
+        logger.exception("Failed to dispatch reprocess task for %s: %s", submission_id, exc)
+        sub.status = previous_status
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not queue reprocessing. The task queue is unavailable.",
+        )
 
     return {"status": "success", "message": "Submission queued for reprocessing."}
 

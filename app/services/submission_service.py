@@ -61,12 +61,17 @@ class SubmissionService:
         user_id: uuid.UUID,
         club_type: Optional[str] = None,
         avatar_skin_tone: Optional[str] = None,
+        avatar_choice: Optional[str] = None,
     ) -> Submission:
         submission = Submission(
             user_id=user_id,
             status=SubmissionStatus.PENDING,
             club_type=club_type,
             avatar_skin_tone=avatar_skin_tone,
+            # Stored at creation. Previously only the select-avatar
+            # endpoint wrote this, and the frontend never calls it, so
+            # every submission reached the instructor with no avatar.
+            avatar_choice=avatar_choice,
         )
         db.add(submission)
         await db.flush()

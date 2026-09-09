@@ -334,12 +334,34 @@ async def save_unity_corrections(
         "Unity corrections saved for submission %s by coach %s — %d frame(s)",
         submission_id, coach.id, len(payload.corrected_frames),
     )
+    # Render the corrected swing video from the skeleton just saved.
+    # Dispatched AFTER the commit above on purpose: the worker opens
+    # its own session and would not see this row from inside an open
+    # transaction. A broker failure must not lose the instructor's
+    # work, so the save still succeeds - but it is logged loudly,
+    # because the customer paid for this video and a silent failure
+    # here is exactly what let the missing dispatch go unnoticed.
+    video_queued = False
+    try:
+        from app.workers.video_tasks import generate_corrected_videos
+        generate_corrected_videos.delay(str(submission_id))
+        video_queued = True
+        logger.info(
+            "Corrected video queued for submission %s", submission_id
+        )
+    except Exception as exc:
+        logger.exception(
+            "CORRECTED VIDEO NOT QUEUED for submission %s: %s",
+            submission_id, exc,
+        )
+
     return {
         "status": "success",
         "message": "Corrections saved.",
         "data": {
             "submission_id": str(submission_id),
             "frames_saved": len(payload.corrected_frames),
+            "corrected_video_queued": video_queued,
         },
     }
 

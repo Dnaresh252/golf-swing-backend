@@ -1,4 +1,5 @@
 import logging
+import re
 import uuid
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, UploadFile, status
@@ -106,17 +107,11 @@ async def create_submission(
     avatar_skin_tone = body.avatar_skin_tone if body else None
     avatar_choice = body.avatar_choice if body else None
 
-    # Validated here as well as in the select-avatar endpoint. An
-    # unknown value would otherwise be stored happily and only surface
-    # as a broken avatar in the instructor tool much later.
-    if avatar_choice is not None and avatar_choice not in _VALID_AVATAR_CHOICES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Invalid avatar_choice '{avatar_choice}'. "
-                f"Must be one of: {', '.join(sorted(_VALID_AVATAR_CHOICES))}."
-            ),
-        )
+    # Normalised to the canonical "avatar_N" id before storage, and the
+    # skin tone checked, so nothing free-text ever reaches the column and
+    # the coach tool always receives one predictable form.
+    avatar_choice = _normalise_avatar_choice(avatar_choice)
+    avatar_skin_tone = _validate_skin_tone(avatar_skin_tone)
 
     # ── Server-side payment / free-eligibility enforcement (create time) ────
     # The frontend now calls create-intent before submissions/create, but the
@@ -385,10 +380,66 @@ async def get_submission_status(
 # POST /submissions/{id}/select-avatar
 # ---------------------------------------------------------------------------
 
-_VALID_AVATAR_CHOICES = {
-    "1st", "2nd", "3rd", "4th", "5th",
-    "6th", "7th", "8th", "9th", "10th",
-}
+# The lineup is 14 avatars. The canonical stored form is always the id
+# "avatar_N"; the app sends ordinal labels ("7th"), older clients and the
+# Unity tool may send the id. Both are accepted, one form is stored, so the
+# coach tool never has to guess which it is looking at.
+AVATAR_COUNT = 14
+_VALID_AVATAR_CHOICES = {f"avatar_{n}" for n in range(1, AVATAR_COUNT + 1)}
+
+_ORDINAL_SUFFIX = {1: "st", 2: "nd", 3: "rd"}
+
+
+def _ordinal(n: int) -> str:
+    if 11 <= (n % 100) <= 13:
+        return f"{n}th"
+    return f"{n}{_ORDINAL_SUFFIX.get(n % 10, 'th')}"
+
+
+_ORDINAL_TO_ID = {_ordinal(n): f"avatar_{n}" for n in range(1, AVATAR_COUNT + 1)}
+
+_AVATAR_ERROR = (
+    "Invalid avatar_choice. Must be avatar_1 ... avatar_14 or 1st ... 14th."
+)
+_SKIN_TONE_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def _normalise_avatar_choice(raw):
+    """
+    Accepts "avatar_7", "avatar7", "7" and "7th"; returns "avatar_7".
+    Raises 400 on anything else. None passes through untouched so the
+    field stays optional.
+    """
+    if raw is None:
+        return None
+    value = str(raw).strip().lower()
+    if value in _ORDINAL_TO_ID:
+        return _ORDINAL_TO_ID[value]
+    if value.startswith("avatar"):
+        digits = value[len("avatar"):].lstrip("_")
+    else:
+        digits = value
+    if digits.isdigit():
+        n = int(digits)
+        if 1 <= n <= AVATAR_COUNT:
+            return f"avatar_{n}"
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=_AVATAR_ERROR,
+    )
+
+
+def _validate_skin_tone(raw):
+    """Hex colour only. The coach tool applies the value directly."""
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    if not _SKIN_TONE_RE.match(value):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid avatar_skin_tone. Must be a hex colour like #C68863.",
+        )
+    return value
 
 
 @router.post(
@@ -402,11 +453,7 @@ async def select_avatar(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if body.avatar_choice not in _VALID_AVATAR_CHOICES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid avatar_choice '{body.avatar_choice}'. Must be one of: {', '.join(sorted(_VALID_AVATAR_CHOICES))}.",
-        )
+    normalised_choice = _normalise_avatar_choice(body.avatar_choice)
 
     result = await db.execute(
         select(Submission).where(Submission.id == submission_id)
@@ -416,7 +463,7 @@ async def select_avatar(
     if submission is None or submission.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
 
-    submission.avatar_choice = body.avatar_choice
+    submission.avatar_choice = normalised_choice
     await db.commit()
     await db.refresh(submission)
 

@@ -65,7 +65,13 @@ class User(Base):
         "Submission", back_populates="user", cascade="all, delete-orphan"
     )
     coach_profile: Mapped[Optional["Coach"]] = relationship(
-        "Coach", back_populates="user", uselist=False, cascade="all, delete-orphan"
+        "Coach",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
+        # coaches has a second fk to users (credential_verified_by), so this
+        # join must name the column it actually travels on.
+        foreign_keys="Coach.user_id",
     )
     discount_codes: Mapped[List["DiscountCode"]] = relationship(
         "DiscountCode", back_populates="user", cascade="all, delete-orphan"

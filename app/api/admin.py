@@ -314,11 +314,49 @@ async def delete_ghosts(
 # Task 4 — Coach Management
 # ---------------------------------------------------------------------------
 
+# Fixed list. Kept in step with frontend/src/config/certifyingBodies.js.
+# Never store free text for either of these.
+CERTIFYING_BODIES = {
+    "pga_america", "lpga", "pga_gbi", "pga_canada",
+    "pga_australia", "cpg_europe", "usgtf", "wgtf",
+}
+VERIFICATION_METHODS = {"public_register", "contacted_body"}
+
+
 class CreateCoachRequest(BaseModel):
     full_name: str
     email: str
     password: str
     credential: str = "golf_coach"
+    certifying_body: str
+    license_number: str
+    credential_verification: str
+
+    @field_validator("certifying_body")
+    @classmethod
+    def body_known(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if v not in CERTIFYING_BODIES:
+            raise ValueError("certifying_body must be one of the known certifying bodies.")
+        return v
+
+    @field_validator("license_number")
+    @classmethod
+    def licence_present(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not (1 <= len(v) <= 64) or not v.isprintable():
+            raise ValueError("license_number is required.")
+        return v
+
+    @field_validator("credential_verification")
+    @classmethod
+    def verification_known(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if v not in VERIFICATION_METHODS:
+            raise ValueError(
+                "credential_verification must be 'public_register' or 'contacted_body'."
+            )
+        return v
 
     @field_validator("credential")
     @classmethod
@@ -370,10 +408,26 @@ async def create_coach(
     db.add(user)
     await db.flush()
 
-    coach = Coach(user_id=user.id, is_active=True, credential=body.credential)
+    # verified_by / verified_at come from the authenticated admin and the
+    # server clock only - never from the client.
+    coach = Coach(
+        user_id=user.id,
+        is_active=True,
+        credential=body.credential,
+        certifying_body=body.certifying_body,
+        license_number=body.license_number,
+        credential_verification=body.credential_verification,
+        credential_verified_by=admin_user.id,
+        credential_verified_at=get_current_utc(),
+    )
     db.add(coach)
 
-    await _audit(db, "coach_created", f"email={email} name={body.full_name} credential={body.credential}")
+    await _audit(
+        db, "coach_created",
+        f"email={email} name={body.full_name} credential={body.credential} "
+        f"certifying_body={body.certifying_body} license_number={body.license_number} "
+        f"verification={body.credential_verification}",
+    )
     await db.commit()
     await db.refresh(user)
     await db.refresh(coach)
@@ -401,6 +455,11 @@ async def create_coach(
             "email": email,
             "full_name": user.name,
             "credential": coach.credential,
+            "certifying_body": coach.certifying_body,
+            "license_number": coach.license_number,
+            "credential_verification": coach.credential_verification,
+            "credential_verified_by": str(coach.credential_verified_by) if coach.credential_verified_by else None,
+            "credential_verified_at": coach.credential_verified_at.isoformat() if coach.credential_verified_at else None,
             "active": True,
             "last_login": None,
         },
@@ -426,6 +485,11 @@ async def list_coaches(
             "email": user.email,
             "active": coach.is_active,
             "credential": coach.credential,
+            "certifying_body": coach.certifying_body,
+            "license_number": coach.license_number,
+            "credential_verification": coach.credential_verification,
+            "credential_verified_by": str(coach.credential_verified_by) if coach.credential_verified_by else None,
+            "credential_verified_at": coach.credential_verified_at.isoformat() if coach.credential_verified_at else None,
             "last_login": user.last_login_at.isoformat() if user.last_login_at else None,
         }
         for coach, user in rows
@@ -858,30 +922,23 @@ async def reprocess_submission(
     if sub is None:
         raise HTTPException(status_code=404, detail="Submission not found.")
 
-    previous_status = sub.status
-    sub.status = SubmissionStatus.ANALYZING
-    await _audit(db, "submission_reprocessed", f"submission_id={submission_id}")
-    await db.commit()
-
-    # This previously imported video_tasks.process_golf_swing, which does
-    # not exist. The ImportError was swallowed by the except below and the
-    # endpoint returned success anyway, so the button silently did nothing.
-    # The real analysis task is process_avatar_generation, the same one
-    # submit-for-analysis dispatches.
+    # Dispatch FIRST, then record the status. The old order set ANALYZING
+    # and committed before dispatching, so a queue failure left the
+    # submission stranded in ANALYZING with no worker coming for it.
     try:
         from app.workers.avatar_tasks import process_avatar_generation
         process_avatar_generation.delay(str(submission_id))
-        logger.info("Admin %s triggered reprocess for submission %s", admin_user.id, submission_id)
     except Exception as exc:
-        # Never strand the submission in ANALYZING with no worker coming
-        # for it, and never report success for work that was not queued.
         logger.exception("Failed to dispatch reprocess task for %s: %s", submission_id, exc)
-        sub.status = previous_status
-        await db.commit()
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Could not queue reprocessing. The task queue is unavailable.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Reprocess could not be queued.",
         )
+
+    sub.status = SubmissionStatus.ANALYZING
+    await _audit(db, "submission_reprocessed", f"submission_id={submission_id}")
+    await db.commit()
+    logger.info("Admin %s triggered reprocess for submission %s", admin_user.id, submission_id)
 
     return {"status": "success", "message": "Submission queued for reprocessing."}
 

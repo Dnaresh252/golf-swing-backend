@@ -118,6 +118,7 @@ class CoachService:
                 "files_count": len(sub.files),
                 "avatar_choice": sub.avatar_choice,
                 "avatar_skin_tone": sub.avatar_skin_tone,
+                "club_type": sub.club_type,
             })
 
         logger.info("Coach queue accessed by: %s", coach_id)
@@ -256,6 +257,7 @@ class CoachService:
             "avatar_glb_url": avatar.avatar_glb_url if avatar else None,
             "avatar_choice": submission.avatar_choice,
             "avatar_skin_tone": submission.avatar_skin_tone,
+            "club_type": submission.club_type,
             "angle_views": angle_views,
             "skeleton_json": skeleton_json,
             "notes": notes,

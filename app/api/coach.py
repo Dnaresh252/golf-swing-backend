@@ -601,6 +601,28 @@ async def pga_approve(
     except Exception as exc:
         logger.warning("PGA approve email failed: %s", exc)
 
+    # Catch-up render. Normally the video was already queued when the
+    # instructor saved corrections, so this does nothing. It matters for
+    # corrections saved before that dispatch existed, and for any render
+    # that never produced rows. The task is idempotent, but checking here
+    # avoids queueing pointless work on every approval.
+    try:
+        from app.models.correction import CorrectedVideo
+        existing = await db.execute(
+            select(CorrectedVideo).where(CorrectedVideo.submission_id == submission_id)
+        )
+        if existing.scalars().first() is None:
+            from app.workers.video_tasks import generate_corrected_videos
+            generate_corrected_videos.delay(str(submission_id))
+            logger.info(
+                "Corrected video queued at PGA approval for submission %s", submission_id
+            )
+    except Exception as exc:
+        logger.exception(
+            "Could not queue corrected video at PGA approval for %s: %s",
+            submission_id, exc,
+        )
+
     logger.info("PGA Pro %s released submission %s", pga_coach.id, submission_id)
     return {
         "status": "success",

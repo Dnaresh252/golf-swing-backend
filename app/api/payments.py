@@ -227,6 +227,13 @@ async def create_payment_intent(
         intent = stripe.PaymentIntent.create(
             amount=amount_cents,
             currency=settings.STRIPE_CURRENCY,
+            # allow_redirects="never" restricts Stripe to methods that confirm
+            # in place (cards, Apple Pay, Google Pay, Link). The captured
+            # photos and video live only in browser memory on the payment
+            # page, so any bank-redirect method would take the golfer away
+            # and lose the swing they just recorded - they would have paid
+            # and still have to capture again.
+            automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
             metadata={
                 "user_id": str(current_user.id),
                 "submission_id": str(body.submission_id) if body.submission_id else "",
@@ -455,3 +462,85 @@ async def payment_config(
             "discount_percentage": settings.DISCOUNT_PERCENTAGE,
         },
     }
+
+# ---------------------------------------------------------------------------
+# POST /payments/{payment_id}/confirm
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{payment_id}/confirm",
+    summary="Confirm a payment directly with Stripe, without waiting on the webhook",
+)
+async def confirm_payment(
+    payment_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Lets a golfer sitting on the payment page get the same answer the webhook
+    would give, immediately, instead of polling history for up to 30 seconds.
+
+    The webhook stays the source of truth. This deliberately calls the very
+    same handlers the webhook calls (_on_payment_succeeded /
+    _on_payment_failed) rather than repeating their logic, so the two paths
+    can never drift apart. Those handlers are already idempotent, so a
+    webhook arriving afterwards will not burn the discount code twice.
+    """
+    result = await db.execute(select(Payment).where(Payment.id == payment_id))
+    payment = result.scalar_one_or_none()
+
+    # Same generic 404 for "not found" and "not yours" - never confirm the
+    # existence of another user's payment.
+    if payment is None or payment.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Payment not found.",
+        )
+
+    def _reply(p: Payment):
+        return {
+            "status": "success",
+            "data": {
+                "payment_id": str(p.id),
+                "status": p.status.value,
+                "amount_cents": p.amount_cents,
+            },
+        }
+
+    # Already settled, or a free submission with no Stripe intent behind it.
+    if payment.status == PaymentStatus.COMPLETED:
+        return _reply(payment)
+    if not payment.stripe_payment_intent_id:
+        return _reply(payment)
+
+    _configure_stripe()
+    try:
+        intent = stripe.PaymentIntent.retrieve(payment.stripe_payment_intent_id)
+    except stripe.StripeError as exc:
+        logger.error(
+            "Stripe retrieve failed for payment %s (intent %s): %s",
+            payment.id, payment.stripe_payment_intent_id, exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "status": "error",
+                "message": "Could not reach the payment processor. Please try again.",
+                "request_id": _request_id(request),
+            },
+        )
+
+    intent_status = intent.get("status")
+    if intent_status == "succeeded":
+        await _on_payment_succeeded(db, payment.stripe_payment_intent_id, intent)
+    elif intent_status == "canceled" or intent.get("last_payment_error"):
+        await _on_payment_failed(db, payment.stripe_payment_intent_id, intent)
+    # anything else (requires_payment_method, processing, ...) stays PENDING
+
+    await db.refresh(payment)
+    logger.info(
+        "Payment %s confirm requested by user %s: intent=%s -> %s",
+        payment.id, current_user.id, intent_status, payment.status.value,
+    )
+    return _reply(payment)

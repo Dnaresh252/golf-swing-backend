@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -39,6 +39,18 @@ class Coach(Base):
         Boolean, nullable=False, default=True, server_default="true"
     )
     # Coach tier: "golf_coach" (default) or "pga_pro"
+    # Certification record. Nullable so instructor rows created before this
+    # was added keep working; every new account sets all five.
+    certifying_body: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    license_number: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    credential_verification: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    credential_verified_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    credential_verified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     credential: Mapped[str] = mapped_column(
         __import__("sqlalchemy").String(20),
         nullable=False,
@@ -66,7 +78,14 @@ class Coach(Base):
     )
 
     # Relationships
-    user: Mapped["User"] = relationship("User", back_populates="coach_profile")
+    user: Mapped["User"] = relationship(
+        "User",
+        back_populates="coach_profile",
+        # coaches now has TWO fks to users (user_id, and credential_verified_by
+        # recording which admin verified the certification), so the join has to
+        # be named explicitly. This side is "the instructor's own account".
+        foreign_keys=[user_id],
+    )
     submissions: Mapped[List["Submission"]] = relationship(
         "Submission",
         back_populates="coach",

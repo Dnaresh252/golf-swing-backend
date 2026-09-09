@@ -102,6 +102,23 @@ def generate_corrected_videos(self: Task, submission_id: str) -> Dict[str, Any]:
             )
             return {"status": "skipped", "reason": "no_corrected_skeleton"}
 
+        # Idempotency guard. This task is dispatched from two places (the
+        # instructor saving corrections, and PGA approval as a catch-up for
+        # corrections saved before that dispatch existed), so it must be safe
+        # to run twice. If every angle is already rendered, stop here rather
+        # than re-encoding and duplicating rows.
+        already = db.execute(
+            select(CorrectedVideo).where(
+                CorrectedVideo.submission_id == uuid.UUID(submission_id)
+            )
+        ).scalars().all()
+        if len({cv.angle for cv in already}) >= len(list(CorrectionAngle)):
+            logger.info(
+                "[%s] Corrected videos already exist for all angles - skipping.",
+                submission_id,
+            )
+            return {"status": "skipped", "reason": "already_rendered"}
+
         skeleton = notes.corrected_skeleton_json
         joints: List[Dict] = skeleton.get("joints", [])
 
@@ -191,6 +208,28 @@ def generate_corrected_videos(self: Task, submission_id: str) -> Dict[str, Any]:
                     )
                 logger.info("[%s] Rendered corrected video for angle: %s", submission_id, angle)
             except (subprocess.TimeoutExpired, RuntimeError) as exc:
+                # Record the failure where an admin can actually see it. Worker
+                # logs are not visible from the admin panel, so a missing
+                # corrected video would otherwise have no explanation.
+                try:
+                    from app.models.audit_log import AuditLog
+                    if isinstance(exc, subprocess.TimeoutExpired):
+                        stderr_text = "ffmpeg timed out after 120s"
+                    else:
+                        stderr_text = str(exc)
+                    db.add(AuditLog(
+                        action="corrected_video_render_failed",
+                        detail=(
+                            f"submission_id={submission_id} angle={angle} "
+                            f"error={stderr_text[:200]}"
+                        ),
+                    ))
+                    db.commit()
+                except Exception as audit_exc:  # never let auditing mask the real error
+                    logger.warning(
+                        "[%s] Could not write render failure to audit log: %s",
+                        submission_id, audit_exc,
+                    )
                 raise self.retry(exc=exc, countdown=60)
 
             # Upload to B2

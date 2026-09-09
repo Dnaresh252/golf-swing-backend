@@ -14,17 +14,25 @@ logger = logging.getLogger(__name__)
 
 _VALID_ANGLES = {"top", "front", "left", "right", "back"}
 
+# All 14 models are new and replace the previous ten entirely, so the tone
+# values measured from the old lineup no longer describe anything. Every
+# entry is a neutral placeholder until the new textures are measured -
+# these are NOT real measurements and are never shown to users.
 _AVATAR_PROFILES = {
-    "avatar_1":  {"tone": 54, "build": 40},
-    "avatar_2":  {"tone": 26, "build": 40},
-    "avatar_3":  {"tone": 46, "build": 40},
-    "avatar_4":  {"tone": 21, "build": 40},
-    "avatar_5":  {"tone": 26, "build": 40},
-    "avatar_6":  {"tone": 31, "build": 40},
-    "avatar_7":  {"tone": 59, "build": 40},
-    "avatar_8":  {"tone": 63, "build": 40},
-    "avatar_9":  {"tone": 52, "build": 40},
-    "avatar_10": {"tone": 31, "build": 40},
+    "avatar_1":   {"tone": 50, "build": 40},  # TODO measure
+    "avatar_2":   {"tone": 50, "build": 40},  # TODO measure
+    "avatar_3":   {"tone": 50, "build": 40},  # TODO measure
+    "avatar_4":   {"tone": 50, "build": 40},  # TODO measure
+    "avatar_5":   {"tone": 50, "build": 40},  # TODO measure
+    "avatar_6":   {"tone": 50, "build": 40},  # TODO measure
+    "avatar_7":   {"tone": 50, "build": 40},  # TODO measure
+    "avatar_8":   {"tone": 50, "build": 40},  # TODO measure
+    "avatar_9":   {"tone": 50, "build": 40},  # TODO measure
+    "avatar_10":  {"tone": 50, "build": 40},  # TODO measure
+    "avatar_11":  {"tone": 50, "build": 40},  # TODO measure
+    "avatar_12":  {"tone": 50, "build": 40},  # TODO measure
+    "avatar_13":  {"tone": 50, "build": 40},  # TODO measure
+    "avatar_14":  {"tone": 50, "build": 40},  # TODO measure
 }
 
 

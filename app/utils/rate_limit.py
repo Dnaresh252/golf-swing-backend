@@ -33,7 +33,7 @@ def _get_redis() -> aioredis.Redis:
     return _redis
 
 
-def make_rate_limiter(max_requests: int, window_seconds: int):
+def make_rate_limiter(max_requests: int, window_seconds: int, fail_closed: bool = False):
     """
     Returns a FastAPI dependency that enforces a fixed-window rate limit
     keyed by (endpoint path, client IP).
@@ -63,6 +63,14 @@ def make_rate_limiter(max_requests: int, window_seconds: int):
         except Exception as exc:
             # Redis unreachable — fail open (log and allow through)
             logger.error("Rate limiter Redis error: %s", exc)
+            if fail_closed:
+                # For auth endpoints, an unreachable Redis must not become an
+                # unlimited-attempts window. Refusing logins briefly beats
+                # leaving the door open while nobody is counting.
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Service temporarily unavailable. Please try again shortly.",
+                )
             return
 
         logger.info(
@@ -89,5 +97,15 @@ def make_rate_limiter(max_requests: int, window_seconds: int):
 
 
 # Pre-built limiters — import these in route files
-login_rate_limiter    = make_rate_limiter(max_requests=5,  window_seconds=60)
-register_rate_limiter = make_rate_limiter(max_requests=10, window_seconds=3600)
+# Auth limiters fail closed: no Redis means no counting, and no counting on
+# a login endpoint is worse than a short outage.
+login_rate_limiter    = make_rate_limiter(max_requests=5,  window_seconds=60, fail_closed=True)
+register_rate_limiter = make_rate_limiter(max_requests=10, window_seconds=3600, fail_closed=True)
+forgot_password_limiter = make_rate_limiter(max_requests=3, window_seconds=60, fail_closed=True)
+refresh_limiter       = make_rate_limiter(max_requests=10, window_seconds=60, fail_closed=True)
+
+# Money and reward endpoints. These fail open: a Redis outage should not stop
+# a paying customer checking out.
+create_intent_limiter = make_rate_limiter(max_requests=10, window_seconds=60)
+verify_post_limiter   = make_rate_limiter(max_requests=5,  window_seconds=60)
+discount_limiter      = make_rate_limiter(max_requests=5,  window_seconds=60)

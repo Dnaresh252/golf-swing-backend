@@ -252,8 +252,12 @@ async def list_ghosts(
         .where(
             User.is_admin == False,  # noqa: E712
             Coach.id == None,  # noqa: E711
+            # is_verified deliberately NOT used here. Email verification is
+            # not implemented, so every account is unverified and including
+            # it listed real paying customers as ghosts. Inactivity alone
+            # decides, and the zero-submissions HAVING clause below still
+            # protects anyone who has actually used the product.
             or_(
-                User.is_verified == False,  # noqa: E712
                 User.last_login_at <= cutoff,
                 User.last_login_at == None,  # noqa: E711
             ),
@@ -436,10 +440,19 @@ async def create_coach(
     try:
         import asyncio
         from app.integrations.sendgrid import sendgrid_service
+        # Mint the same one-hour token the reset flow uses, so the invitation
+        # carries a set-password link rather than the password itself. The
+        # password the admin typed is never emailed.
+        import secrets as _secrets
+        from app.services.auth_service import _get_redis as _reset_redis
+        set_token = _secrets.token_urlsafe(32)
+        await _reset_redis().set(f"pwd_reset:{set_token}", str(user.id), ex=3600)
+        set_password_link = f"{settings.FRONTEND_URL}/reset-password?token={set_token}"
+
         asyncio.get_event_loop().run_in_executor(
             None,
             sendgrid_service.send_coach_invitation,
-            email, user.name, body.password, body.credential,
+            email, user.name, set_password_link, body.credential,
         )
     except Exception as exc:
         logger.warning("Could not queue coach invitation email: %s", exc)
@@ -447,7 +460,7 @@ async def create_coach(
     logger.info("Admin %s created coach %s (%s)", admin_user.id, user.id, email)
     return {
         "status": "success",
-        "message": "Coach account created. An invitation email has been sent.",
+        "message": "Instructor account created. An invitation email has been sent.",
         "data": {
             "id": str(coach.id),
             "coach_id": str(coach.id),
@@ -1173,6 +1186,7 @@ async def mark_coach_paid(
         "message": f"Marked as paid: ${owed_cents / 100:.2f}",
         "data": _coach_balance_dict(coach, user, review_cents, approval_cents),
     }
+
 
 # ---------------------------------------------------------------------------
 # Instructor picker settings

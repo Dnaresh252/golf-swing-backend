@@ -64,6 +64,29 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Checked per request, not per token. An access token lives up to 30
+    # minutes, so without this a suspended or deactivated account keeps full
+    # access until it happens to expire.
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "status": "error",
+                "message": "This account is no longer active.",
+                "request_id": request_id,
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if user.suspended:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "status": "error",
+                "message": "This account is suspended.",
+                "request_id": request_id,
+            },
+        )
+
     return user
 
 

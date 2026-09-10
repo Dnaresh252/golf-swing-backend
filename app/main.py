@@ -36,8 +36,12 @@ logging.config.dictConfig(
                 "formatter": "default",
             },
             "file": {
-                "class": "logging.FileHandler",
+                # Rotating, so a long-running server cannot fill the disk
+                # with a single ever-growing log file.
+                "class": "logging.handlers.RotatingFileHandler",
                 "filename": settings.LOG_FILE,
+                "maxBytes": 10 * 1024 * 1024,
+                "backupCount": 5,
                 "formatter": "default",
                 "encoding": "utf-8",
             },
@@ -50,6 +54,25 @@ logging.config.dictConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# Error tracking. Entirely optional: with no SENTRY_DSN set this block does
+# nothing, so the app runs unchanged until someone supplies one.
+if settings.SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.celery import CeleryIntegration
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+
+        sentry_sdk.init(
+            dsn=settings.SENTRY_DSN,
+            environment=settings.APP_ENV,
+            release=settings.APP_VERSION,
+            integrations=[FastApiIntegration(), CeleryIntegration()],
+            traces_sample_rate=0.0,
+        )
+        logger.info("Sentry error tracking enabled.")
+    except Exception as exc:  # never let telemetry stop the app booting
+        logger.warning("Sentry not enabled: %s", exc)
 
 # ---------------------------------------------------------------------------
 # Router imports (deferred so logging is configured first)
@@ -111,8 +134,11 @@ app = FastAPI(
         "expert coach review with annotated corrections, social sharing, "
         "and personalised discount rewards — all in one API."
     ),
-    docs_url="/docs",
-    redoc_url="/redoc",
+    # Schema browsers are a map of the API for anyone who asks. Off in
+    # production; still available in every other environment.
+    docs_url=None if settings.APP_ENV == "production" else "/docs",
+    redoc_url=None if settings.APP_ENV == "production" else "/redoc",
+    openapi_url=None if settings.APP_ENV == "production" else "/openapi.json",
     lifespan=lifespan,
 )
 
@@ -274,6 +300,11 @@ async def health_check():
         db_status = "connected"
     except Exception:
         logger.warning("Health check: database unreachable.")
+
+    # Public body stays deliberately thin - a health probe does not need to
+    # tell the internet which environment and version it is looking at.
+    if settings.APP_ENV == "production":
+        return {"status": "healthy"}
 
     return {
         "status": "healthy",

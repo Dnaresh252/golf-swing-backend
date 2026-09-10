@@ -149,12 +149,30 @@ async def save_notes(
     auth: tuple = Depends(get_current_coach),
 ):
     _, coach = auth
+    body = payload.model_dump(exclude_none=True)
     notes = await coach_service.save_notes(
         db,
         submission_id,
         coach.id,
-        payload.model_dump(exclude_none=True),
+        body,
     )
+
+    # The corrected skeleton now arrives here rather than through the removed
+    # corrections route, so this is where the render is queued. Dispatched
+    # after save_notes has committed, and only when a skeleton was actually
+    # supplied - plain note autosaves must not queue a render on every
+    # keystroke. The task is idempotent and the corrections API keeps the
+    # video hidden until a PGA Pro approves.
+    if body.get("corrected_skeleton_json"):
+        try:
+            from app.workers.video_tasks import generate_corrected_videos
+            generate_corrected_videos.delay(str(submission_id))
+            logger.info("Corrected video queued for submission %s", submission_id)
+        except Exception as exc:
+            logger.exception(
+                "CORRECTED VIDEO NOT QUEUED for submission %s: %s", submission_id, exc
+            )
+
     return {
         "status": "success",
         "message": "Notes saved.",
@@ -280,91 +298,28 @@ async def reject_submission(
 
 @router.post(
     "/queue/{submission_id}/corrections",
-    summary="Receive corrected skeleton frames from the Unity coach tool",
+    summary="Removed. Use /notes then the approve route.",
 )
-async def save_unity_corrections(
-    submission_id: uuid.UUID,
-    payload: UnityCorrectionsRequest,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    auth: tuple = Depends(get_current_coach),
-):
-    _, coach = auth
+async def save_unity_corrections(submission_id: uuid.UUID):
+    """
+    Closed deliberately.
 
-    # Verify submission exists
-    sub_result = await db.execute(select(Submission).where(Submission.id == submission_id))
-    submission = sub_result.scalar_one_or_none()
-    if submission is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Submission not found.")
+    This route accepted a corrected skeleton from any active instructor with
+    no lock check, no check that the caller was the assigned instructor, and
+    no credential check, then moved the submission straight to
+    CORRECTIONS_MADE. That skipped PGA_APPROVAL entirely, so a Golf
+    Instructor could release a correction to the golfer without a PGA Pro
+    ever seeing it - and once the corrected-video dispatch was wired up it
+    released the video too.
 
-    # Build the corrections blob to store
-    corrections_data = {
-        "corrected_frames": [f.model_dump() for f in payload.corrected_frames],
-        "coach_notes": payload.coach_notes,
-        "submitted_at": payload.created_at,
-        "frame_count": len(payload.corrected_frames),
-    }
-
-    # Upsert into coach_notes (unique per submission_id)
-    notes_result = await db.execute(
-        select(CoachNotes).where(CoachNotes.submission_id == submission_id)
+    The Unity tool posts to /notes, which is guarded, and the approve route
+    already routes by credential. Nothing we ship called this, so it is gone
+    rather than patched: one fewer state-changing door to defend.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="This route has been removed. Use /notes, then the approve route.",
     )
-    notes = notes_result.scalar_one_or_none()
-
-    if notes is None:
-        notes = CoachNotes(
-            submission_id=submission_id,
-            coach_id=coach.id,
-            notes_text=payload.coach_notes,
-            corrected_skeleton_json=corrections_data,
-        )
-        db.add(notes)
-    else:
-        notes.corrected_skeleton_json = corrections_data
-        if payload.coach_notes:
-            notes.notes_text = payload.coach_notes
-
-    # Advance submission status to CORRECTIONS_MADE if it was IN_REVIEW
-    if submission.status in (SubmissionStatus.IN_REVIEW, SubmissionStatus.READY_FOR_REVIEW):
-        submission.status = SubmissionStatus.CORRECTIONS_MADE
-
-    await db.commit()
-
-    logger.info(
-        "Unity corrections saved for submission %s by coach %s — %d frame(s)",
-        submission_id, coach.id, len(payload.corrected_frames),
-    )
-    # Render the corrected swing video from the skeleton just saved.
-    # Dispatched AFTER the commit above on purpose: the worker opens
-    # its own session and would not see this row from inside an open
-    # transaction. A broker failure must not lose the instructor's
-    # work, so the save still succeeds - but it is logged loudly,
-    # because the customer paid for this video and a silent failure
-    # here is exactly what let the missing dispatch go unnoticed.
-    video_queued = False
-    try:
-        from app.workers.video_tasks import generate_corrected_videos
-        generate_corrected_videos.delay(str(submission_id))
-        video_queued = True
-        logger.info(
-            "Corrected video queued for submission %s", submission_id
-        )
-    except Exception as exc:
-        logger.exception(
-            "CORRECTED VIDEO NOT QUEUED for submission %s: %s",
-            submission_id, exc,
-        )
-
-    return {
-        "status": "success",
-        "message": "Corrections saved.",
-        "data": {
-            "submission_id": str(submission_id),
-            "frames_saved": len(payload.corrected_frames),
-            "corrected_video_queued": video_queued,
-        },
-    }
-
 
 # ---------------------------------------------------------------------------
 # GET /coach/results-queue
@@ -710,6 +665,7 @@ async def get_my_earnings(
             "lifetime_paid": round(coach.lifetime_paid_cents / 100, 2),
         },
     }
+
 
 # ---------------------------------------------------------------------------
 # GET /coach/instructors  (instructor picker)

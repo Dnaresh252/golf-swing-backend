@@ -20,6 +20,7 @@ from app.models.submission import Submission, SubmissionStatus
 from app.models.user import User
 from app.services import admin_settings
 from app.utils.helpers import get_current_utc
+from app.utils.rate_limit import create_intent_limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -86,6 +87,7 @@ async def create_payment_intent(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await create_intent_limiter(request)  # explicit: Depends() is skipped here
     rid = _request_id(request)
 
     # ── 1. Base price from persistent admin settings ───────────────────────
@@ -111,6 +113,14 @@ async def create_payment_intent(
             )
         )
         free_code_record = fc_result.scalar_one_or_none()
+        # A code earned by another golfer is not redeemable here. Public
+        # admin-created codes carry no user_id and stay open to everyone.
+        if (
+            free_code_record is not None
+            and free_code_record.user_id is not None
+            and free_code_record.user_id != current_user.id
+        ):
+            free_code_record = None
         if free_code_record is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -462,6 +472,7 @@ async def payment_config(
             "discount_percentage": settings.DISCOUNT_PERCENTAGE,
         },
     }
+
 
 # ---------------------------------------------------------------------------
 # POST /payments/{payment_id}/confirm

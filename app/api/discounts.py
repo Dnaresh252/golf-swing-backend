@@ -17,6 +17,7 @@ from app.models.submission import Submission, SubmissionStatus
 from app.models.user import User
 from app.schemas.discount import DiscountCodeResponse, DiscountCodesListResponse
 from app.utils.helpers import get_current_utc
+from app.utils.rate_limit import discount_limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -87,6 +88,7 @@ async def generate_discount(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await discount_limiter(request)  # explicit: Depends() is skipped here
     rid = _request_id(request)
 
     # Verify ownership

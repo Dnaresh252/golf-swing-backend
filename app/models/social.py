@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,6 +30,11 @@ class SocialSharing(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+    # Canonical video id of the verified post. One grant per video, per
+    # golfer - the same post cannot be cashed in twice.
+    post_video_key: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, index=True
     )
     platforms: Mapped[list] = mapped_column(
         JSON, nullable=False, default=list, server_default="[]"

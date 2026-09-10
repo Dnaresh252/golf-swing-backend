@@ -35,5 +35,9 @@ celery_app.conf.update(
             "task": "app.workers.instructor_tasks.expire_instructor_requests",
             "schedule": 300,  # seconds
         },
+        "unclaimed-submission-reminders-every-6-hours": {
+            "task": "app.workers.notification_tasks.send_bulk_reminder_emails",
+            "schedule": 6 * 60 * 60,  # seconds
+        },
     },
 )

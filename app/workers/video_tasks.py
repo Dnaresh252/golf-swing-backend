@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from app.workers.celery_app import celery_app
+from app.workers.corrected_render import render_angle
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,8 @@ def generate_corrected_videos(self: Task, submission_id: str) -> Dict[str, Any]:
             FileType.BACK_IMAGE:  "back",
         }
 
+        swing_video_path: Optional[str] = None
+
         for f in submission.files:
             if f.file_type in angle_map:
                 dest = os.path.join(tmp_dir, f"{angle_map[f.file_type]}_original.jpg")
@@ -159,6 +162,38 @@ def generate_corrected_videos(self: Task, submission_id: str) -> Dict[str, Any]:
                     angle_image_paths[angle_map[f.file_type]] = dest
                 except Exception as exc:
                     raise self.retry(exc=exc, countdown=60)
+            elif f.file_type == FileType.SWING_VIDEO:
+                # The swing itself. Only one angle was filmed, so only that
+                # angle's left panel can show motion; the rest hold a still.
+                dest = os.path.join(tmp_dir, "swing_video.mp4")
+                try:
+                    urllib.request.urlretrieve(f.file_url, dest)
+                    swing_video_path = dest
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] Could not fetch swing video, rendering from stills: %s",
+                        submission_id, exc,
+                    )
+
+        # The AI skeleton is what the left panel draws and what the corrected
+        # pose is blended away from. Without it there is nothing honest to
+        # render, so stop rather than produce a still.
+        from app.models.avatar import Avatar
+        avatar = db.execute(
+            select(Avatar).where(Avatar.submission_id == uuid.UUID(submission_id))
+        ).scalar_one_or_none()
+        skeleton_json = (avatar.skeleton_json if avatar else None) or {}
+        skeleton_frames = skeleton_json.get("frames", []) or []
+        if not skeleton_frames:
+            logger.warning(
+                "[%s] No AI skeleton frames - cannot render corrected video.",
+                submission_id,
+            )
+            return {"status": "skipped", "reason": "no_skeleton_frames"}
+
+        video_view = str(
+            (skeleton_json.get("meta") or {}).get("video_view") or ""
+        ).strip().lower()
 
         # ------------------------------------------------------------------
         # Step 3 — Render corrected pose video per angle using ffmpeg
@@ -166,55 +201,47 @@ def generate_corrected_videos(self: Task, submission_id: str) -> Dict[str, Any]:
         all_angles = ["top", "front", "left", "right", "back"]
         user_id = str(submission.user_id)
 
+        render_reports: List[Dict[str, Any]] = []
+
         for angle in all_angles:
             output_video = os.path.join(tmp_dir, f"corrected_{angle}.mp4")
             source_image = angle_image_paths.get(angle)
 
-            if source_image and os.path.exists(source_image):
-                # Render skeleton overlay onto the source image for 3 seconds
-                ffmpeg_cmd = [
-                    settings.FFMPEG_PATH,
-                    "-y",
-                    "-loop", "1",
-                    "-i", source_image,
-                    "-t", "3",
-                    "-vf", f"scale={settings.VIDEO_OUTPUT_WIDTH}:{settings.VIDEO_OUTPUT_HEIGHT}",
-                    "-c:v", "libx264",
-                    "-pix_fmt", "yuv420p",
-                    output_video,
-                ]
-            else:
-                # No source image — create a black placeholder video
-                ffmpeg_cmd = [
-                    settings.FFMPEG_PATH,
-                    "-y",
-                    "-f", "lavfi",
-                    "-i", f"color=black:size={settings.VIDEO_OUTPUT_WIDTH}x{settings.VIDEO_OUTPUT_HEIGHT}:duration=3",
-                    "-c:v", "libx264",
-                    "-pix_fmt", "yuv420p",
-                    output_video,
-                ]
+            # Motion belongs only to the angle that was actually filmed.
+            angle_video = swing_video_path if (
+                swing_video_path and video_view and video_view == angle
+            ) else None
+            # If the analysis never recorded which view was filmed, fall back
+            # to treating the video as the front angle rather than smearing
+            # one angle's skeleton across all five.
+            if swing_video_path and not video_view and angle == "front":
+                angle_video = swing_video_path
 
             try:
-                proc = subprocess.run(
-                    ffmpeg_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=120,
+                report = render_angle(
+                    angle=angle,
+                    out_path=output_video,
+                    width=settings.VIDEO_OUTPUT_WIDTH,
+                    height=settings.VIDEO_OUTPUT_HEIGHT,
+                    skeleton_frames=skeleton_frames,
+                    correction=skeleton,
+                    still_path=source_image,
+                    video_path=angle_video,
+                    ffmpeg_path=settings.FFMPEG_PATH,
                 )
-                if proc.returncode != 0:
-                    raise RuntimeError(
-                        f"ffmpeg failed for angle {angle}: {proc.stderr.decode()[:200]}"
-                    )
-                logger.info("[%s] Rendered corrected video for angle: %s", submission_id, angle)
-            except (subprocess.TimeoutExpired, RuntimeError) as exc:
+                render_reports.append(report)
+                logger.info(
+                    "[%s] Rendered corrected video for angle %s (%s, %d joint(s) corrected).",
+                    submission_id, angle, report["frame_used"], report["joints_corrected"],
+                )
+            except (subprocess.TimeoutExpired, RuntimeError, ValueError) as exc:
                 # Record the failure where an admin can actually see it. Worker
                 # logs are not visible from the admin panel, so a missing
                 # corrected video would otherwise have no explanation.
                 try:
                     from app.models.audit_log import AuditLog
                     if isinstance(exc, subprocess.TimeoutExpired):
-                        stderr_text = "ffmpeg timed out after 120s"
+                        stderr_text = "ffmpeg timed out"
                     else:
                         stderr_text = str(exc)
                     db.add(AuditLog(
@@ -225,7 +252,7 @@ def generate_corrected_videos(self: Task, submission_id: str) -> Dict[str, Any]:
                         ),
                     ))
                     db.commit()
-                except Exception as audit_exc:  # never let auditing mask the real error
+                except Exception as audit_exc:
                     logger.warning(
                         "[%s] Could not write render failure to audit log: %s",
                         submission_id, audit_exc,
@@ -281,8 +308,31 @@ def generate_corrected_videos(self: Task, submission_id: str) -> Dict[str, Any]:
                 {"status_message": "Your coach has made corrections to your swing video."},
             )
 
+        # Audit the success too, with the frame each angle was built from,
+        # so a question about a delivered video can be answered later.
+        try:
+            from app.models.audit_log import AuditLog
+            summary = "; ".join(
+                f"{r['angle']}:{r['frame_used']}:{r['joints_corrected']}j"
+                for r in render_reports
+            )
+            db.add(AuditLog(
+                action="corrected_video_rendered",
+                detail=f"submission_id={submission_id} {summary}"[:1000],
+            ))
+            db.commit()
+        except Exception as audit_exc:
+            logger.warning(
+                "[%s] Could not write render success to audit log: %s",
+                submission_id, audit_exc,
+            )
+
         logger.info("[%s] generate_corrected_videos complete.", submission_id)
-        return {"status": "success", "submission_id": submission_id}
+        return {
+            "status": "success",
+            "submission_id": submission_id,
+            "renders": render_reports,
+        }
 
     except MaxRetriesExceededError:
         logger.error("[%s] Max retries exceeded in generate_corrected_videos.", submission_id)

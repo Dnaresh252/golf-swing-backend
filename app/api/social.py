@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import uuid
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
@@ -17,6 +18,7 @@ from app.models.submission import Submission, SubmissionStatus
 from app.models.user import User
 from app.schemas.social import SocialOptInRequest, SocialOptInResponse, SocialPostResponse
 from app.utils.helpers import get_current_utc
+from app.utils.rate_limit import verify_post_limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -166,7 +168,10 @@ async def post_results(
     )
     db.add(results_video)
 
-    submission.status = SubmissionStatus.COMPLETED
+    # Uploading a video is not a completion of anything. This used to set
+    # COMPLETED, which is the state generate-discount checks, so a golfer
+    # could upload any video to their own swing and unlock a discount code.
+    # COMPLETED is set by the social-approval path only.
     await db.flush()
     await db.refresh(results_video)
 
@@ -277,6 +282,39 @@ class VerifyPostRequest(_BaseModel):
     platform: str  # "youtube" or "tiktok"
 
 
+
+def _canonical_video_key(platform: str, url: str) -> Optional[str]:
+    """
+    Reduce a post URL to the video it points at, so the same video shared
+    through a share link, a shortened link and the full URL all collapse to
+    one key. Returns None when nothing recognisable can be extracted, in
+    which case the per-submission check still applies.
+    """
+    import re as _re
+
+    u = (url or "").strip()
+    if not u:
+        return None
+    if platform == "youtube":
+        for pat in (r"[?&]v=([A-Za-z0-9_-]{6,})",
+                    r"youtu\.be/([A-Za-z0-9_-]{6,})",
+                    r"/shorts/([A-Za-z0-9_-]{6,})",
+                    r"/embed/([A-Za-z0-9_-]{6,})"):
+            m = _re.search(pat, u)
+            if m:
+                return f"youtube:{m.group(1)}"
+        return None
+    if platform == "tiktok":
+        m = _re.search(r"/video/(\d{6,})", u)
+        if m:
+            return f"tiktok:{m.group(1)}"
+        m = _re.search(r"tiktok\.com/t/([A-Za-z0-9]+)", u)
+        if m:
+            return f"tiktok:{m.group(1)}"
+        return None
+    return None
+
+
 @router.post("/{submission_id}/verify-post", summary="Verify a public social post and grant a free code")
 async def verify_post(
     submission_id: uuid.UUID,
@@ -285,6 +323,7 @@ async def verify_post(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    await verify_post_limiter(request)  # explicit: Depends() is skipped here
     rid = _request_id(request)
     submission = await _get_owned_submission(db, submission_id, current_user.id)
 
@@ -365,15 +404,37 @@ async def verify_post(
     from datetime import timedelta
     from app.models.free_code import FreeCode
 
+    # One grant per video, per golfer. Without this the same post could be
+    # submitted again and again for a fresh code each time.
+    video_key = _canonical_video_key(platform, post_url)
+    if video_key:
+        dup = await db.execute(
+            select(SocialSharing)
+            .join(Submission, Submission.id == SocialSharing.submission_id)
+            .where(
+                SocialSharing.post_video_key == video_key,
+                Submission.user_id == current_user.id,
+            )
+        )
+        if dup.scalars().first() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A free code has already been granted for this post.",
+            )
+
     code = f"GGWFREE-{secrets.token_hex(4).upper()}"
     free_code = FreeCode(
         code=code,
         max_uses=1,
+        # Earned by this golfer, redeemable only by this golfer.
+        user_id=current_user.id,
         expires_at=get_current_utc() + timedelta(days=90),
     )
     db.add(free_code)
 
     # Record the verified post so it cannot be claimed twice
+    if sharing is not None and video_key:
+        sharing.post_video_key = video_key
     if sharing is None:
         sharing = SocialSharing(
             submission_id=submission_id,

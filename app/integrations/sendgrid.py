@@ -85,9 +85,14 @@ class SendGridService:
         )
 
     def send_coach_invitation(
-        self, to_email: str, full_name: str, temp_password: str, credential: str
+        self, to_email: str, full_name: str, set_password_link: str, credential: str
     ) -> None:
-        tier = "PGA Pro Golf Coach" if credential == "pga_pro" else "Golf Coach"
+        """
+        The temporary password used to be emailed in clear text, which meant
+        the account's credentials sat in an inbox indefinitely. The invitation
+        now carries a one-hour set-password link instead.
+        """
+        tier = "PGA Pro Instructor" if credential == "pga_pro" else "Golf Instructor"
         html = f"""
         <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a2b4a">
           <h2 style="color:#1a2b4a">Welcome to GGW Academy, {full_name}!</h2>
@@ -98,16 +103,17 @@ class SendGridService:
                 <td style="padding:8px 12px">https://golfgameworldacademy.com/coach-login</td></tr>
             <tr><td style="padding:8px 12px"><b>Email:</b></td>
                 <td style="padding:8px 12px">{to_email}</td></tr>
-            <tr><td style="padding:8px 12px"><b>Temporary password:</b></td>
-                <td style="padding:8px 12px">{temp_password}</td></tr>
           </table>
-          <p>Please sign in and change your password after your first login.</p>
+          <p>Use the link below to set your password. It expires in one hour.</p>
+          <p><a href="{set_password_link}" style="background:#d4af37;color:#1a2b4a;
+             padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:bold"
+             >Set your password</a></p>
           <p style="color:#888;font-size:12px">Golf Game World LLC</p>
         </div>
         """
         self.send_plain_email(
             to_email=to_email,
-            subject="Your GGW Academy Coach Account",
+            subject="Your GGW Academy Instructor Account",
             html_content=html,
         )
 

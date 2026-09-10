@@ -17,7 +17,12 @@ from app.schemas.auth import (
     CoachLogin,
 )
 from app.services.auth_service import auth_service
-from app.utils.rate_limit import login_rate_limiter, register_rate_limiter
+from app.utils.rate_limit import (
+    forgot_password_limiter,
+    login_rate_limiter,
+    refresh_limiter,
+    register_rate_limiter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +155,7 @@ async def coach_login(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
+    await login_rate_limiter(request)  # explicit: Depends() is skipped by this starlette
     rid = _request_id(request)
     try:
         user, coach = await auth_service.authenticate_coach(
@@ -242,6 +248,7 @@ async def refresh_token(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
+    await refresh_limiter(request)  # explicit: Depends() is skipped by this starlette
     rid = _request_id(request)
     try:
         new_access_token = await auth_service.refresh_access_token(payload.refresh_token)
@@ -283,6 +290,21 @@ async def logout(
         raise _error(str(exc), rid, status.HTTP_401_UNAUTHORIZED)
 
     await auth_service.logout_user(token)
+
+    # The access token was already blacklisted above, but the refresh token
+    # outlives it by seven days. Without revoking it too, "Log out" left a
+    # working key to the account behind. The client sends it back so we can
+    # blacklist the exact token it holds.
+    body_refresh = None
+    try:
+        payload = await request.json()
+        if isinstance(payload, dict):
+            body_refresh = payload.get("refresh_token")
+    except Exception:
+        body_refresh = None
+    if body_refresh:
+        await auth_service.logout_user(body_refresh)
+
     logger.info("User logged out: %s", current_user.id)
 
     return {
@@ -302,6 +324,7 @@ async def forgot_password(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
+    await forgot_password_limiter(request)  # explicit: Depends() is skipped by this starlette
     await auth_service.forgot_password(db, payload.email)
     return {
         "status": "success",

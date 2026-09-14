@@ -44,26 +44,6 @@ DEFAULT_OVERLAY_OPTIONS: Dict[str, Any] = {
     "tracking_lines": None,
 }
 
-# Coaching score-card axes (see ``GolfSwingAnalyzer.export_score_card``).
-_DEFAULT_SCORECARD_IDEAL_RANGES: Dict[str, tuple] = {
-    "spine_angle": (20.0, 48.0),
-    "hip_rotation_angle": (25.0, 55.0),
-    "arm_extension": (150.0, 180.0),
-    "balance": (42.0, 58.0),
-    "tempo": (2.5, 3.5),
-}
-
-# Protractor overlays at impact (see ``SkeletonOverlay.draw_angle_arcs``).
-_ARC_IDEAL_RANGES: Dict[str, tuple] = {
-    "spine_angle": (20.0, 48.0),
-    "hip_rotation_angle": (25.0, 55.0),
-    "knee_flex_left": (150.0, 175.0),
-    "knee_flex_right": (150.0, 175.0),
-    "arm_extension_left": (150.0, 180.0),
-    "arm_extension_right": (150.0, 180.0),
-}
-
-
 def _read_video_frame_bgr(video_path: str, frame_index: int) -> Optional[Any]:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -232,8 +212,6 @@ def _analyze_submission_sync(
             "annotated_swing_video": None,
             "wrist_elbow_analysis_video": None,
             "tempo_chart": None,
-            "swing_score_card": None,
-            "angle_arcs_impact": None,
             "confidence_heatmap_impact": None,
             "motion_trail_left_wrist": None,
         }
@@ -287,21 +265,6 @@ def _analyze_submission_sync(
             tempo_info = {}
             analysis_warnings.append(f"tempo_chart: {exc}")
 
-        swing_for_scorecard = dict(swing_angles)
-        ratio = tempo_info.get("backswing_downswing_ratio") if tempo_info else None
-        if ratio is not None:
-            swing_for_scorecard["tempo"] = float(ratio)
-
-        score_card_path = os.path.join(analysis_dir, "swing_score_card.png")
-        try:
-            analysis_outputs["swing_score_card"] = analyzer.export_score_card(
-                swing_for_scorecard,
-                _DEFAULT_SCORECARD_IDEAL_RANGES,
-                score_card_path,
-            )
-        except Exception as exc:
-            analysis_warnings.append(f"swing_score_card: {exc}")
-
         impact_fn = int(key_frames.get("impact", -1))
         impact_joints: list = []
         if impact_fn >= 0:
@@ -326,21 +289,6 @@ def _analyze_submission_sync(
                             )
                         except Exception as exc:
                             analysis_warnings.append(f"confidence_heatmap_impact: {exc}")
-
-                        arcs_path = os.path.join(analysis_dir, "angle_arcs_impact.png")
-                        try:
-                            arc_img = overlay.draw_angle_arcs(
-                                impact_bgr,
-                                impact_joints,
-                                swing_angles,
-                                _ARC_IDEAL_RANGES,
-                            )
-                            if cv2.imwrite(arcs_path, arc_img):
-                                analysis_outputs["angle_arcs_impact"] = arcs_path
-                            else:
-                                analysis_warnings.append("angle_arcs_impact: imwrite failed")
-                        except Exception as exc:
-                            analysis_warnings.append(f"angle_arcs_impact: {exc}")
                 finally:
                     try:
                         os.unlink(tmp_impact)

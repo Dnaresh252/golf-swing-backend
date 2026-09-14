@@ -9,6 +9,7 @@ class SubmissionCreate(BaseModel):
     club_type: Optional[str] = None
     avatar_choice: Optional[str] = None
     avatar_skin_tone: Optional[str] = None
+    handedness: Optional[str] = None
 
 
 class SubmissionFileResponse(BaseModel):
@@ -27,6 +28,7 @@ class SubmissionResponse(BaseModel):
     club_type: Optional[str] = None
     avatar_choice: Optional[str] = None
     avatar_skin_tone: Optional[str] = None
+    handedness: Optional[str] = None
     coach_id: Optional[uuid.UUID] = None
     files: List[SubmissionFileResponse] = []
     created_at: datetime

@@ -14,6 +14,7 @@ class CoachQueueItem(BaseModel):
     avatar_choice: Optional[str] = None
     avatar_skin_tone: Optional[str] = None
     club_type: Optional[str] = None
+    handedness: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

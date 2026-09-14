@@ -889,6 +889,7 @@ async def list_submissions(
             "user_email": user_email,
             "created_at": sub.created_at.isoformat(),
             "club_type": sub.club_type,
+            "handedness": sub.handedness,
             "status": sub.status.value,
             "coach_name": coach_name,
         })

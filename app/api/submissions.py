@@ -113,6 +113,16 @@ async def create_submission(
     avatar_choice = _normalise_avatar_choice(avatar_choice)
     avatar_skin_tone = _validate_skin_tone(avatar_skin_tone)
 
+    # Handedness is asked, never guessed from the video. Exactly "right" or
+    # "left"; absent or null is allowed (the instructor tool then assumes
+    # right-handed and logs that it did).
+    handedness = body.handedness if body else None
+    if handedness is not None and handedness not in ("right", "left"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid handedness. Must be 'right' or 'left'.",
+        )
+
     # ── Server-side payment / free-eligibility enforcement (create time) ────
     # The frontend now calls create-intent before submissions/create, but the
     # server never trusts that happened — same gate as submit-for-analysis.
@@ -126,6 +136,7 @@ async def create_submission(
     submission = await submission_service.create_submission(
         db, current_user.id, club_type=club_type,
         avatar_skin_tone=avatar_skin_tone, avatar_choice=avatar_choice,
+        handedness=handedness,
     )
     logger.info("Submission created: %s by user: %s", submission.id, current_user.id)
     return {

@@ -62,6 +62,7 @@ class SubmissionService:
         club_type: Optional[str] = None,
         avatar_skin_tone: Optional[str] = None,
         avatar_choice: Optional[str] = None,
+        handedness: Optional[str] = None,
     ) -> Submission:
         submission = Submission(
             user_id=user_id,
@@ -72,6 +73,7 @@ class SubmissionService:
             # endpoint wrote this, and the frontend never calls it, so
             # every submission reached the instructor with no avatar.
             avatar_choice=avatar_choice,
+            handedness=handedness,
         )
         db.add(submission)
         await db.flush()

@@ -119,6 +119,7 @@ class CoachService:
                 "avatar_choice": sub.avatar_choice,
                 "avatar_skin_tone": sub.avatar_skin_tone,
                 "club_type": sub.club_type,
+                "handedness": sub.handedness,
             })
 
         logger.info("Coach queue accessed by: %s", coach_id)
@@ -258,6 +259,7 @@ class CoachService:
             "avatar_choice": submission.avatar_choice,
             "avatar_skin_tone": submission.avatar_skin_tone,
             "club_type": submission.club_type,
+            "handedness": submission.handedness,
             "angle_views": angle_views,
             "skeleton_json": skeleton_json,
             "notes": notes,

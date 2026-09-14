@@ -40,8 +40,19 @@ async def _build_payload(db: AsyncSession) -> Dict[str, Any]:
 
     total_submissions = await db.scalar(select(func.count(Submission.id)))
 
+    # A deleted instructor is a soft delete: the account (users.is_active) is
+    # switched off while the coaches row is kept for payout history, so
+    # Coach.is_active alone still counted every removed, suspended and test
+    # instructor. Count only instructors whose accounts are genuinely live.
     total_coaches = await db.scalar(
-        select(func.count(Coach.id)).where(Coach.is_active.is_(True))
+        select(func.count(Coach.id))
+        .join(User, User.id == Coach.user_id)
+        .where(
+            Coach.is_active.is_(True),
+            User.is_active.is_(True),
+            User.suspended.is_(False),
+            ~User.email.ilike(_TEST_EMAIL_PATTERN),
+        )
     )
 
     # Only report a rating once real ratings exist. A default of 0

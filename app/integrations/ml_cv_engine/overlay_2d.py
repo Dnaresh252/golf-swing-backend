@@ -538,54 +538,6 @@ class SkeletonOverlay:
             raise ValueError(f"Unable to save motion trail image: {output_path}")
         return output_path
 
-    def draw_angle_arcs(
-        self, image: np.ndarray, joints: list, angles_dict: dict, ideal_ranges: dict
-    ) -> np.ndarray:
-        """Draw protractor-style arcs and angle labels on an image."""
-        output = image.copy()
-        h, w = output.shape[:2]
-        joints_by_id = {int(j["id"]): j for j in joints if "id" in j}
-
-        angle_joint_map = {
-            "spine_angle": 23,
-            "hip_rotation_angle": 24,
-            "knee_flex_left": 25,
-            "knee_flex_right": 26,
-            "arm_extension_left": 13,
-            "arm_extension_right": 14,
-        }
-
-        for angle_name, value in angles_dict.items():
-            if value is None or angle_name not in angle_joint_map:
-                continue
-            pivot_id = angle_joint_map[angle_name]
-            pivot_joint = joints_by_id.get(pivot_id)
-            if pivot_joint is None:
-                continue
-
-            x_px = int(np.clip(float(pivot_joint["x"]), 0.0, 1.0) * (w - 1))
-            y_px = int(np.clip(float(pivot_joint["y"]), 0.0, 1.0) * (h - 1))
-            center = (x_px, y_px)
-
-            low, high = ideal_ranges.get(angle_name, (-1e9, 1e9))
-            color = (0, 255, 0) if low <= float(value) <= high else (0, 0, 255)
-
-            start_angle = 0
-            end_angle = int(np.clip(float(value), 0.0, 180.0))
-            cv2.ellipse(output, center, (28, 28), 0, start_angle, end_angle, color, 2)
-            cv2.putText(
-                output,
-                f"{int(round(float(value)))} deg",
-                (x_px + 8, y_px - 8),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.45,
-                color,
-                1,
-                cv2.LINE_AA,
-            )
-
-        return output
-
     def draw_confidence_heatmap(
         self, image_path: str, joints: list, output_path: str
     ) -> str:

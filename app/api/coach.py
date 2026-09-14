@@ -119,6 +119,13 @@ async def get_submission_for_review(
             "status": sub.status.value,
             "user_name": sub.user.name if sub.user else None,
             "created_at": sub.created_at.isoformat(),
+            # Capture fields the instructor tool reads from this response. The
+            # service already returned these, but this dict never forwarded
+            # them, so the tool always fell back to its default avatar.
+            "avatar_choice": data["avatar_choice"],
+            "avatar_skin_tone": data["avatar_skin_tone"],
+            "club_type": data["club_type"],
+            "handedness": data["handedness"],
             "files": data["files"],
             "avatar": {
                 "status": data["avatar_status"],

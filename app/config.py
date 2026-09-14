@@ -111,17 +111,17 @@ class Settings(BaseSettings):
     SENDGRID_COACH_APPROVAL_TEMPLATE: str = ""
     SENDGRID_DISCOUNT_EARNED_TEMPLATE: str = ""
     SENDGRID_RESET_PASSWORD_TEMPLATE: str = ""
-    FRONTEND_URL: str = "https://ai-golf-swing.vercel.app"
+    FRONTEND_URL: str = "https://golfgameworldacademy.com"
 
     # YouTube
     YOUTUBE_CLIENT_ID: str = ""
     YOUTUBE_CLIENT_SECRET: str = ""
-    YOUTUBE_REDIRECT_URI: str = "http://localhost:8000/auth/youtube/callback"
+    YOUTUBE_REDIRECT_URI: str = "https://golfgameworldacademy.com/youtube-callback"
 
     # TikTok
     TIKTOK_CLIENT_KEY: str = ""
     TIKTOK_CLIENT_SECRET: str = ""
-    TIKTOK_REDIRECT_URI: str = "http://localhost:8000/auth/tiktok/callback"
+    TIKTOK_REDIRECT_URI: str = "https://golfgameworldacademy.com/tiktok-callback"
 
     # Discounts
     DISCOUNT_CODE_PREFIX: str = "GOLF2024"

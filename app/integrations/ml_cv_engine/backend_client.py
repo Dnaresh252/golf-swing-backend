@@ -1,7 +1,7 @@
 """Backend API client for Golf Swing platform integration.
 
 This client targets:
-https://golf-swing-backend-production.up.railway.app
+https://api.golfgameworldacademy.com
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ class BackendClient:
 
     def __init__(
         self,
-        base_url: str = "https://golf-swing-backend-production.up.railway.app",
+        base_url: str = "https://api.golfgameworldacademy.com",
         token: Optional[str] = None,
         timeout: float = 60.0,
     ) -> None:

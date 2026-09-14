@@ -55,24 +55,12 @@ logging.config.dictConfig(
 
 logger = logging.getLogger(__name__)
 
-# Error tracking. Entirely optional: with no SENTRY_DSN set this block does
-# nothing, so the app runs unchanged until someone supplies one.
-if settings.SENTRY_DSN:
-    try:
-        import sentry_sdk
-        from sentry_sdk.integrations.celery import CeleryIntegration
-        from sentry_sdk.integrations.fastapi import FastApiIntegration
+# Error tracking. Entirely optional: with no SENTRY_DSN set this does
+# nothing. Reports carry no customer personal data; the scrubbing that
+# guarantees it lives in app/utils/error_tracking.py.
+from app.utils.error_tracking import init_error_tracking  # noqa: E402
 
-        sentry_sdk.init(
-            dsn=settings.SENTRY_DSN,
-            environment=settings.APP_ENV,
-            release=settings.APP_VERSION,
-            integrations=[FastApiIntegration(), CeleryIntegration()],
-            traces_sample_rate=0.0,
-        )
-        logger.info("Sentry error tracking enabled.")
-    except Exception as exc:  # never let telemetry stop the app booting
-        logger.warning("Sentry not enabled: %s", exc)
+init_error_tracking("api")
 
 # ---------------------------------------------------------------------------
 # Router imports (deferred so logging is configured first)

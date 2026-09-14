@@ -5,6 +5,8 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.dependencies import get_current_user
+from app.models.user import User
 from app.schemas.auth import (
     AuthResponse,
     CoachLoginResponse,
@@ -22,6 +24,8 @@ from app.utils.rate_limit import (
     login_rate_limiter,
     refresh_limiter,
     register_rate_limiter,
+    resend_verification_limiter,
+    verify_email_limiter,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,6 +40,10 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +87,11 @@ async def register(
     # Fire-and-forget welcome email — do not block or fail the request
     import asyncio
     asyncio.create_task(auth_service.send_welcome_email(user))
+
+    # Verification link. The token is stored before responding; only the
+    # send is fire-and-forget, so a slow SendGrid never delays signup.
+    verify_token = await auth_service.issue_email_verification(user)
+    asyncio.create_task(auth_service.send_verification_email(user.email, user.name, verify_token))
 
     data = AuthResponse(
         tokens=TokenResponse(**tokens),
@@ -133,14 +146,20 @@ async def login(
         user=UserResponse.model_validate(user),
     ).model_dump()
     data["access_token"] = tokens["access_token"]
+    deletion_cancelled = bool(getattr(user, "_deletion_cancelled", False))
+    data["deletion_cancelled"] = deletion_cancelled
 
     return {
         "status": "success",
-        "message": "Logged in successfully.",
+        "message": (
+            "Welcome back. Your account deletion has been cancelled."
+            if deletion_cancelled else "Logged in successfully."
+        ),
         "access_token": tokens["access_token"],
         "refresh_token": tokens["refresh_token"],
         "role": data["user"]["role"],
         "user": data["user"],
+        "deletion_cancelled": deletion_cancelled,
         "data": data,
     }
 
@@ -330,6 +349,53 @@ async def forgot_password(
         "status": "success",
         "message": "If that email is registered, a reset link has been sent.",
         "data": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /verify-email  (no auth: the link may be opened on another device)
+# ---------------------------------------------------------------------------
+
+@router.post("/verify-email", summary="Confirm an email address using the emailed token")
+async def verify_email(
+    payload: VerifyEmailRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    await verify_email_limiter(request)  # explicit: Depends() is skipped by this starlette
+    try:
+        await auth_service.verify_email(db, payload.token)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    return {
+        "status": "success",
+        "message": "Your email address is verified.",
+        "data": {"is_verified": True},
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /resend-verification  (signed-in golfer)
+# ---------------------------------------------------------------------------
+
+@router.post("/resend-verification", summary="Send a new email verification link")
+async def resend_verification(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    await resend_verification_limiter(request)  # explicit: Depends() is skipped by this starlette
+    if current_user.is_verified:
+        return {
+            "status": "success",
+            "message": "Your email address is already verified.",
+            "data": {"is_verified": True, "sent": False},
+        }
+    token = await auth_service.issue_email_verification(current_user)
+    await auth_service.send_verification_email(current_user.email, current_user.name, token)
+    return {
+        "status": "success",
+        "message": "We sent a new verification link. Check your inbox.",
+        "data": {"is_verified": False, "sent": True},
     }
 
 

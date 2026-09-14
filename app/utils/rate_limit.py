@@ -103,6 +103,9 @@ login_rate_limiter    = make_rate_limiter(max_requests=5,  window_seconds=60, fa
 register_rate_limiter = make_rate_limiter(max_requests=10, window_seconds=3600, fail_closed=True)
 forgot_password_limiter = make_rate_limiter(max_requests=3, window_seconds=60, fail_closed=True)
 refresh_limiter       = make_rate_limiter(max_requests=10, window_seconds=60, fail_closed=True)
+verify_email_limiter  = make_rate_limiter(max_requests=10, window_seconds=60, fail_closed=True)
+resend_verification_limiter = make_rate_limiter(max_requests=3, window_seconds=600, fail_closed=True)
+delete_account_limiter = make_rate_limiter(max_requests=5, window_seconds=600, fail_closed=True)
 
 # Money and reward endpoints. These fail open: a Redis outage should not stop
 # a paying customer checking out.

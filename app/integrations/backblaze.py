@@ -124,6 +124,32 @@ class BackblazeService:
             logger.warning("B2 delete failed for id=%s: %s", b2_file_id, exc)
             return False
 
+    def delete_file_by_id(self, b2_file_id: str) -> str:
+        """
+        Delete a file version knowing only its id.
+
+        The stored file_url values are b2_download_file_by_id links, which do
+        not carry the file name that delete_file_version needs, so the name is
+        looked up from the id first. Returns "deleted", "missing" (already
+        gone, which callers treat as success) or "failed". Never raises.
+        """
+        try:
+            bucket = self._get_bucket()
+            try:
+                version = self._api.get_file_info(b2_file_id)
+            except Exception as exc:
+                text = f"{type(exc).__name__} {exc}".lower()
+                if "notpresent" in text or "not_found" in text or "not found" in text or "file_not_present" in text:
+                    logger.info("B2 delete: id=%s already gone", b2_file_id)
+                    return "missing"
+                raise
+            bucket.delete_file_version(b2_file_id, version.file_name)
+            logger.info("B2 delete OK: %s (id=%s)", version.file_name, b2_file_id)
+            return "deleted"
+        except Exception as exc:
+            logger.warning("B2 delete by id failed for id=%s: %s", b2_file_id, exc)
+            return "failed"
+
     def generate_download_url(self, file_name: str) -> str:
         """
         Return the public download URL for a file already stored in the bucket.

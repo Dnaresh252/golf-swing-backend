@@ -3,7 +3,7 @@ import uuid
 from datetime import timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -400,13 +400,73 @@ async def deactivate_account(
     return {"status": "success", "message": "Your account has been deactivated."}
 
 
-@router.delete("/me", summary="Deactivate the current user's own account (alias)")
-async def deactivate_account_alias(
+class DeleteAccountRequest(BaseModel):
+    password: str = ""
+    # Optional: the client's refresh token, revoked along with the access token.
+    refresh_token: Optional[str] = None
+
+
+@router.delete("/me", summary="Request deletion of the current user's account (7-day grace period)")
+async def delete_my_account(
     request: Request,
+    body: Optional[DeleteAccountRequest] = Body(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # V6.2 frontend calls DELETE /users/me for the same self-deactivate
-    # action as POST /users/deactivate above. Kept as two routes rather
-    # than changing either side, since both are now live in the wild.
-    return await deactivate_account(request, db, current_user)
+    """
+    Schedules real deletion seven days out and signs the account out
+    everywhere. Logging back in before then cancels it. After that the
+    person is purged and payment/submission rows are kept anonymised
+    (app/services/account_deletion.py).
+
+    Password errors are 400, not 401: a 401 makes the frontend treat the
+    session as expired and log the golfer out mid-confirmation.
+    """
+    from app.services import account_deletion
+    from app.services.auth_service import auth_service
+    from app.utils.rate_limit import delete_account_limiter
+
+    await delete_account_limiter(request)  # explicit: Depends() is skipped by this starlette
+
+    if current_user.is_admin or current_user.__dict__.get("coach_profile") is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Instructor and admin accounts are removed by an administrator.",
+        )
+    if body is None or not body.password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please confirm your password to delete your account.",
+        )
+    if not verify_password(body.password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That password is incorrect.",
+        )
+    if await account_deletion.blocking_submission_count(db, current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=account_deletion.BLOCKED_MESSAGE,
+        )
+
+    when = await account_deletion.request_deletion(db, current_user)
+
+    # Every session is already refused while deletion is pending; revoking
+    # the tokens in hand as well means nothing lingers after cancellation.
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        await auth_service.logout_user(auth_header.split(" ", 1)[1])
+    if body.refresh_token:
+        await auth_service.logout_user(body.refresh_token)
+
+    return {
+        "status": "success",
+        "message": (
+            f"Your account will be deleted on {when:%B} {when.day}, {when.year}. "
+            "Log back in before then if you change your mind."
+        ),
+        "data": {
+            "deletion_scheduled_for": when.isoformat(),
+            "grace_period_days": account_deletion.GRACE_PERIOD.days,
+        },
+    }

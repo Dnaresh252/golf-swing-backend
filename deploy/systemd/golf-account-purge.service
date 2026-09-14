@@ -1,0 +1,14 @@
+[Unit]
+Description=GGW Academy - purge accounts whose 7-day deletion grace period has ended
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=golfs
+Group=golfs
+WorkingDirectory=/home/golfs/golf-swing-backend
+EnvironmentFile=/home/golfs/golf-swing-backend/.env
+Environment=PATH=/home/golfs/golf-swing-backend/venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/golfs/golf-swing-backend/venv/bin/python -m app.workers.account_purge
+TimeoutStartSec=1800

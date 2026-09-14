@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_verified_email
 from app.models.avatar import AvatarStatus
 from app.models.submission import Submission, SubmissionStatus
 from app.models.submission_file import FileType
@@ -103,6 +103,7 @@ async def create_submission(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    require_verified_email(current_user)
     club_type = body.club_type if body else None
     avatar_skin_tone = body.avatar_skin_tone if body else None
     avatar_choice = body.avatar_choice if body else None
@@ -232,6 +233,7 @@ async def submit_for_analysis(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    require_verified_email(current_user)
     # ── Server-side payment / free-eligibility enforcement ──────────────
     # Do not trust that the frontend went through the payment page first.
     allowed = await _has_payment_or_free_eligibility(db, current_user.id, submission_id)

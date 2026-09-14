@@ -47,6 +47,15 @@ class User(Base):
     suspended: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # Account deletion (app/services/account_deletion.py). Requested starts
+    # the 7-day grace period; deleted marks the purge, after which this row
+    # is an anonymous tombstone kept so payments and submissions reconcile.
+    deletion_requested_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_login_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

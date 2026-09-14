@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.models.coach import Coach
 from app.models.user import User
+from app.services import account_deletion
 from app.schemas.auth import UserRegister
 from app.utils.constants import ErrorMessage
 from app.utils.security import (
@@ -102,6 +103,12 @@ class AuthService:
 
         if getattr(user, "suspended", False):
             raise PermissionError("This account has been suspended. Contact support.")
+
+        # Logging back in during the grace period is how a golfer cancels a
+        # deletion they asked for. The flag tells /login to say so.
+        if user.deletion_requested_at is not None and user.deleted_at is None:
+            account_deletion.cancel_deletion(db, user)
+            user._deletion_cancelled = True
 
         await reset_failed_attempts(email)
         from datetime import datetime, timezone
@@ -268,6 +275,10 @@ class AuthService:
             raise ValueError(ErrorMessage.ACCOUNT_INACTIVE)
         if getattr(user, "suspended", False):
             raise ValueError("Account is suspended.")
+        # Every session is shut while a deletion is pending. The only way
+        # back in is a fresh password login, which cancels the deletion.
+        if user.deletion_requested_at is not None:
+            raise ValueError("This account is scheduled for deletion. Log in again to cancel it.")
 
         return user
 
@@ -329,6 +340,68 @@ class AuthService:
             logger.info("Password reset email sent to: %s", user.email)
         except Exception as exc:
             logger.warning("Failed to send password reset email to %s: %s", user.email, exc)
+
+    # ------------------------------------------------------------------
+    # Email verification
+    # ------------------------------------------------------------------
+
+    EMAIL_VERIFY_TTL_SECONDS = 24 * 60 * 60
+
+    async def issue_email_verification(self, user: User) -> str:
+        """
+        Mint a single-use verification token, valid 24 hours. Issuing a new
+        one invalidates the previous link, so only the latest email works.
+        """
+        r = _get_redis()
+        previous = await r.get(f"email_verify_user:{user.id}")
+        if previous:
+            await r.delete(f"email_verify:{previous}")
+        token = secrets.token_urlsafe(32)
+        ttl = self.EMAIL_VERIFY_TTL_SECONDS
+        await r.set(f"email_verify:{token}", str(user.id), ex=ttl)
+        await r.set(f"email_verify_user:{user.id}", token, ex=ttl)
+        return token
+
+    async def send_verification_email(self, email: str, name: str, token: str) -> None:
+        """Plain-text verification email. Never raises."""
+        try:
+            from sendgrid import SendGridAPIClient
+            from sendgrid.helpers.mail import Content, Mail
+
+            link = f"{settings.FRONTEND_URL}/verify-email?token={token}"
+            message = Mail(
+                from_email=(settings.SENDGRID_FROM_EMAIL, settings.SENDGRID_FROM_NAME),
+                to_emails=email,
+            )
+            message.subject = f"Confirm your email for {settings.SENDGRID_FROM_NAME}"
+            message.add_content(Content(
+                "text/plain",
+                f"Hi {name},\n\nPlease confirm your email address so you can submit your swing:\n\n"
+                f"{link}\n\nThis link expires in 24 hours. If you did not create an account, "
+                f"you can ignore this email.\n\n{settings.SENDGRID_FROM_NAME}",
+            ))
+            SendGridAPIClient(settings.SENDGRID_API_KEY).send(message)
+            logger.info("Verification email sent to: %s", email)
+        except Exception as exc:
+            logger.warning("Failed to send verification email to %s: %s", email, exc)
+
+    async def verify_email(self, db: AsyncSession, token: str) -> User:
+        """Consume a verification token. Raises ValueError if invalid or expired."""
+        invalid = "This verification link is invalid or has expired. Request a new one from your dashboard."
+        r = _get_redis()
+        user_id = await r.get(f"email_verify:{token}") if token else None
+        if not user_id:
+            raise ValueError(invalid)
+        user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+        if user is None or not user.is_active or user.deleted_at is not None:
+            raise ValueError(invalid)
+        user.is_verified = True
+        await db.commit()
+        await r.delete(f"email_verify:{token}")
+        if await r.get(f"email_verify_user:{user.id}") == token:
+            await r.delete(f"email_verify_user:{user.id}")
+        logger.info("Email verified for user: %s", user.id)
+        return user
 
     async def forgot_password(self, db: AsyncSession, email: str) -> None:
         """

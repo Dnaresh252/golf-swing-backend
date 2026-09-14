@@ -14,6 +14,10 @@ Run both combined (development only):
 from celery.schedules import crontab
 
 from app.workers.celery_app import celery_app
+from app.utils.error_tracking import init_error_tracking
+
+# Same privacy-scrubbed Sentry setup as the API; a no-op without SENTRY_DSN.
+init_error_tracking("celery")
 
 # Import all ORM models so SQLAlchemy's class registry is fully populated
 # before any task initialises a mapper (prevents "failed to locate a name" errors

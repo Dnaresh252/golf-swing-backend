@@ -91,6 +91,34 @@ async def get_current_user(
 
 
 # ---------------------------------------------------------------------------
+# require_verified_email
+# ---------------------------------------------------------------------------
+
+EMAIL_NOT_VERIFIED_MESSAGE = (
+    "Please verify your email address before submitting a swing or paying. "
+    "Check your inbox for the link, or request a new one."
+)
+
+
+def require_verified_email(user: User) -> None:
+    """
+    Golfers must verify their email before submitting or paying; browsing
+    stays open. Instructors (created by an admin) and admins are exempt.
+    Called explicitly at the top of each gated handler.
+    """
+    if user.is_verified or user.is_admin or user.__dict__.get("coach_profile") is not None:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "message": EMAIL_NOT_VERIFIED_MESSAGE,
+            "detail": EMAIL_NOT_VERIFIED_MESSAGE,
+            "code": "email_not_verified",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # get_current_coach
 # ---------------------------------------------------------------------------
 

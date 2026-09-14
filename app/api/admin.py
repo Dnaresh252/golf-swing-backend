@@ -160,6 +160,7 @@ async def list_users(
         .where(
             User.is_admin == False,  # noqa: E712
             Coach.id == None,  # noqa: E711
+            User.deleted_at.is_(None),  # purged accounts are anonymous tombstones
         )
         .group_by(User.id)
         .order_by(User.created_at.desc())
@@ -181,6 +182,7 @@ async def list_users(
             "suspended": user.suspended,
             "submissions_count": sub_count,
             "last_active": user.last_login_at.isoformat() if user.last_login_at else user.updated_at.isoformat(),
+            "deletion_requested_at": user.deletion_requested_at.isoformat() if user.deletion_requested_at else None,
         })
 
     return {"status": "success", "data": {"items": items, "page": page}}
@@ -229,12 +231,29 @@ async def delete_user(
     if user.is_admin or user.coach_profile is not None:
         raise HTTPException(status_code=400, detail="Cannot delete admin or coach accounts.")
 
-    email = user.email
-    await _audit(db, "user_deleted", f"user_id={user_id} email={email}")
-    await db.delete(user)
+    # Same purge as a golfer's own deletion, without the grace period. A plain
+    # db.delete() here used to cascade away the user's payments and
+    # submissions, which accounting has to keep.
+    from app.services import account_deletion
+    if user.deleted_at is not None:
+        return {"status": "success", "message": "User already deleted."}
+    if await account_deletion.blocking_submission_count(db, user.id):
+        raise HTTPException(
+            status_code=409,
+            detail="This user has a swing with an instructor. It must be released before the account can be deleted.",
+        )
+    try:
+        summary = await account_deletion.purge_user(db, user, reason=f"admin:{admin_user.id}")
+    except account_deletion.StorageCleanupError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=502,
+            detail="Some of this user's stored files could not be deleted. Nothing was changed; try again shortly.",
+        )
+    await _audit(db, "user_deleted", f"user_id={user_id} by_admin={admin_user.id}")
     await db.commit()
-    logger.info("Admin %s deleted user %s (%s)", admin_user.id, user_id, email)
-    return {"status": "success", "message": "User deleted."}
+    logger.info("Admin %s deleted user %s %s", admin_user.id, user_id, summary)
+    return {"status": "success", "message": "User deleted.", "data": summary}
 
 
 @router.get("/users/ghosts", summary="List ghost accounts (unverified, no submissions, inactive)")
@@ -305,8 +324,15 @@ async def delete_ghosts(
         )
         if (sub_count_row.scalar() or 0) > 0:
             continue
+        if user.deleted_at is not None:
+            continue
+        # Purge, not db.delete(): a ghost can still have payment rows.
+        from app.services import account_deletion
+        try:
+            await account_deletion.purge_user(db, user, reason=f"admin_ghost:{admin_user.id}")
+        except account_deletion.StorageCleanupError:
+            continue
         deleted.append(str(uid))
-        await db.delete(user)
 
     await _audit(db, "ghosts_purged", f"count={len(deleted)} ids={deleted}")
     await db.commit()
@@ -408,6 +434,7 @@ async def create_coach(
         name=body.full_name.strip(),
         is_admin=False,
         is_active=True,
+        is_verified=True,  # instructors are created by an admin; no email step
     )
     db.add(user)
     await db.flush()

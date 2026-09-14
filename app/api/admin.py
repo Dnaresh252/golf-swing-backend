@@ -552,12 +552,28 @@ async def delete_coach(
     coach, user = row
 
     email = user.email
-    # Soft delete — same convention as student self-deactivate. Flips
-    # is_active off (blocks login, hides from GET /admin/coaches and the
-    # users list) but keeps the Coach row, lifetime payout totals, and
-    # every review/coach_notes record intact for bookkeeping and history.
-    user.is_active = False
-    await _audit(db, "coach_deleted", f"coach_id={coach_id} user_id={user.id} email={email}")
+    if user.deleted_at is not None:
+        return {"status": "success", "message": "Coach account deleted."}
+    # Soft delete: the Coach row, lifetime payout totals and every
+    # review/coach_notes record stay for bookkeeping and history. The login
+    # is closed and the email released, so the same instructor can be added
+    # again later. Flipping users.is_active alone kept the address taken for
+    # good, and left the coach row active (still assignable, still counted).
+    from app.services import account_deletion
+    in_review = await account_deletion.instructor_active_review_count(db, coach.id)
+    if in_review:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This instructor has {in_review} swing(s) in review. "
+                "Reassign them to another instructor before deleting the account."
+            ),
+        )
+    requests_released = await account_deletion.release_instructor_account(db, user, coach)
+    await _audit(
+        db, "coach_deleted",
+        f"coach_id={coach_id} user_id={user.id} email={email} requests_released={requests_released}",
+    )
     await db.commit()
     logger.info("Admin %s soft-deleted coach %s (user %s, %s)", admin_user.id, coach_id, user.id, email)
     return {"status": "success", "message": "Coach account deleted."}

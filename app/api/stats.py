@@ -38,7 +38,12 @@ async def _build_payload(db: AsyncSession) -> Dict[str, Any]:
         )
     )
 
-    total_submissions = await db.scalar(select(func.count(Submission.id)))
+    # Swings from internal test accounts are not real usage.
+    total_submissions = await db.scalar(
+        select(func.count(Submission.id))
+        .join(User, User.id == Submission.user_id)
+        .where(~User.email.ilike(_TEST_EMAIL_PATTERN))
+    )
 
     # A deleted instructor is a soft delete: the account (users.is_active) is
     # switched off while the coaches row is kept for payout history, so

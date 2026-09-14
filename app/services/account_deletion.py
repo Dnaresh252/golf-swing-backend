@@ -84,8 +84,57 @@ def scheduled_for(user: User) -> Optional[datetime]:
     return user.deletion_requested_at + GRACE_PERIOD
 
 
-def tombstone_email(user_id: uuid.UUID) -> str:
+def tombstone_email(user_id: uuid.UUID, original_email: Optional[str] = None) -> str:
+    # Internal test accounts keep a golftest.com address, so every count that
+    # excludes test accounts (public stats, platform_since) still excludes
+    # them once they are deleted. Nothing personal is kept either way.
+    if original_email and original_email.lower().endswith("golftest.com"):
+        return f"deleted-{user_id.hex}@deleted.golftest.com"
     return f"deleted-{user_id.hex}@deleted.invalid"
+
+
+# A swing an instructor has claimed, or one waiting on PGA sign-off that can
+# be sent back to them. Removing the instructor would strand it.
+INSTRUCTOR_BLOCKING_STATUSES = (
+    SubmissionStatus.IN_REVIEW,
+    SubmissionStatus.PGA_APPROVAL,
+)
+
+
+async def instructor_active_review_count(db: AsyncSession, coach_id: uuid.UUID) -> int:
+    return (
+        await db.scalar(
+            select(func.count(Submission.id)).where(
+                Submission.coach_id == coach_id,
+                Submission.status.in_(INSTRUCTOR_BLOCKING_STATUSES),
+            )
+        )
+    ) or 0
+
+
+async def release_instructor_account(db: AsyncSession, user: User, coach) -> int:
+    """
+    An instructor removed by an admin. Their reviews, notes and payout totals
+    are business records, so the coaches row stays under their name. The
+    login is closed for good and the email address is released, so the same
+    person can be added again later as a fresh account. Golfers who had asked
+    for this instructor go back to the open queue instead of waiting out the
+    request window. Returns how many requests were released. The caller
+    commits, after checking instructor_active_review_count().
+    """
+    released = (
+        await db.execute(
+            update(Submission)
+            .where(Submission.requested_coach_id == coach.id)
+            .values(requested_coach_id=None, instructor_request_expires_at=None)
+        )
+    ).rowcount or 0
+    coach.is_active = False
+    user.is_active = False
+    user.email = tombstone_email(user.id, user.email)
+    user.password_hash = hash_password(secrets.token_urlsafe(48))
+    user.deleted_at = _now()
+    return released
 
 
 async def blocking_submission_count(db: AsyncSession, user_id: uuid.UUID) -> int:
@@ -201,7 +250,7 @@ async def purge_user(db: AsyncSession, user: User, *, reason: str) -> dict:
     await db.execute(update(FreeCode).where(FreeCode.user_id == user.id).values(active=False))
 
     now = _now()
-    user.email = tombstone_email(user.id)
+    user.email = tombstone_email(user.id, user.email)
     user.name = "Deleted user"
     user.password_hash = hash_password(secrets.token_urlsafe(48))
     user.profile_picture_url = None

@@ -13,6 +13,7 @@ from app.models.user import User
 from app.services import account_deletion
 from app.schemas.auth import UserRegister
 from app.utils.constants import ErrorMessage
+from app.utils.validators import password_strength_error
 from app.utils.security import (
     check_account_locked,
     create_access_token,
@@ -430,6 +431,14 @@ class AuthService:
         user: Optional[User] = result.scalar_one_or_none()
         if user is None or not user.is_active:
             raise ValueError("Invalid or expired password reset token.")
+
+        # Same strength rules as registration. Checked here rather than on the
+        # request schema so every caller of this path is covered, including the
+        # instructor set-password link, and so the token is only consumed once
+        # the new password is acceptable.
+        weakness = password_strength_error(new_password)
+        if weakness:
+            raise ValueError(weakness)
 
         user.password_hash = hash_password(new_password)
         await r.delete(f"pwd_reset:{token}")

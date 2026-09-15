@@ -115,6 +115,23 @@ def validate_password_strength(password: str) -> bool:
     return bool(_PASSWORD_RE.match(password))
 
 
+def password_strength_error(password: str) -> Optional[str]:
+    """
+    Return the first rule *password* breaks, or None when it is strong enough.
+    Same rules and wording as registration, so a golfer setting a password on
+    the reset page is told exactly what is missing rather than the whole list.
+    """
+    if len(password) < 8:
+        return "Password must be at least 8 characters."
+    if not re.search(r"[A-Z]", password):
+        return "Password must contain at least one uppercase letter."
+    if not re.search(r"\d", password):
+        return "Password must contain at least one number."
+    if not re.search(r"[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?]", password):
+        return "Password must contain at least one special character."
+    return None
+
+
 def validate_discount_code_format(code: str) -> bool:
     """Return True if *code* matches the GOLF2024-XXXXX pattern."""
     return bool(_DISCOUNT_RE.match(code.strip().upper()))

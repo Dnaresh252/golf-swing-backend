@@ -434,6 +434,10 @@ class AuthService:
         user.password_hash = hash_password(new_password)
         await r.delete(f"pwd_reset:{token}")
         await db.commit()
+        # Proving control of the inbox is stronger than the lockout it replaces:
+        # without this, a golfer locked out by failed logins resets their
+        # password and is still refused for up to 30 minutes.
+        await reset_failed_attempts(user.email)
         logger.info("Password reset completed for user: %s", user.id)
 
     # ------------------------------------------------------------------
